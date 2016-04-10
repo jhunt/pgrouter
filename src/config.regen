@@ -10,9 +10,16 @@ sub define {
 sub lookup {
 	return sprintf("\t{ %-24s %-15s },\n", "$_[0],", qq("$_[1]"));
 }
+sub name {
+	my ($c, $s) = @_;
+	$s = $s ? qq("$s") : "NULL";
+	return sprintf("\t{ %-24s %-24s %-15s },\n", "$c,", qq("$c",), $s);
+}
+
 
 my @defines  = ();  # list of `#define T_BLAH ...` directives
 my @keywords = ();  # guts of a struct assignment for keyword lookup
+my @names    = ();  # guts of a struct assignment for T_* name lookup
 
 while (<DATA>) {
 	chomp;
@@ -21,13 +28,16 @@ while (<DATA>) {
 
 	if ($type eq 'token') {
 		push @defines, define("T_${const}");
+		push @names,     name("T_${const}", "");
 
 	} elsif ($type eq 'keyword') {
-		push @defines, define("T_KEYWORD_${const}");
+		push @defines,  define("T_KEYWORD_${const}");
 		push @keywords, lookup("T_KEYWORD_${const}", $word);
+		push @names,      name("T_KEYWORD_${const}", $word);
 
 	} elsif ($type eq 'type') {
 		push @defines, define("T_TYPE_${const}");
+		push @names,     name("T_TYPE_${const}", "");
 	}
 }
 
@@ -40,6 +50,15 @@ static struct {
 	const char *match;
 } KEYWORDS[] = {
 @keywords	{-1, NULL},
+};
+
+/* token const lookup table */
+static struct {
+	int         value;
+	const char *name;
+	const char *literal;
+} TOKEN_NAMES[] = {
+@names	{-1, NULL, NULL},
 };
 EOF
 

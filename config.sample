@@ -24,13 +24,16 @@ health {
   password "sekrit squirrel"
 }
 
+#backend default tls skipverify
+#backend default lag 200
+#backend default weight 100
 backend default {
   tls skipverify;
   lag 200
   weight 100
 }
 backend 10.0.0.5:6432 { lag 800; }
-backend 10.0.0.6:6432
+backend 10.0.0.6:6432 { }
 
 backend default { tls off }
 backend 10.0.0.7:6432 { weight 125; lag 500b }

@@ -39,7 +39,38 @@ struct __l {
 	lexer_fn f; /* current lexer function    */
 };
 
-static void dump(LEXER *l)
+typedef struct __p PARSER;
+typedef int (*parser_fn)(PARSER*);
+
+struct __p {
+	char *backend; /* current backend scope    */
+
+	LEXER *l;      /* lexer to get tokens from */
+	parser_fn f;   /* current parser function  */
+};
+
+static const char* token_name(int type)
+{
+	int i;
+	for (i = 0; TOKEN_NAMES[i].name != NULL; i++) {
+		if (TOKEN_NAMES[i].value == type) {
+			return TOKEN_NAMES[i].name;
+		}
+	}
+	return "(unknown)";
+}
+
+static void dump_token(TOKEN *t)
+{
+	char buf[256];
+	int n = (t->length > 255 ? 255 : t->length);
+	strncpy(buf, t->value, n);
+	buf[n] = '\0';
+	fprintf(stderr, "[token]: {%s(%d), '%s', %d}\n",
+	                token_name(t->type), t->type, buf, t->length);
+}
+
+static void dump_lexer(LEXER *l)
 {
 	char buf[256];
 	int n = (l->pos - l->start > 255 ? 255 : l->pos - l->start);
@@ -103,7 +134,6 @@ static int accept_all(LEXER *l, const char *valid)
 static TOKEN token(int type, LEXER *l) {
 	TOKEN t = { type, NULL, 0 };
 	if (l) {
-		dump(l);
 		t.value  = l->src + l->start;
 		t.length = l->pos - l->start;
 		ignore(l);
@@ -135,6 +165,10 @@ static TOKEN lex_any(LEXER *l)
 {
 	for (;;) {
 		char c = next(l);
+		if (c == 0) {
+			l->f = NULL;
+			return token(T_EOS, NULL);
+		}
 
 		if (c == '\n') {
 			ignore(l);
@@ -190,6 +224,7 @@ static TOKEN lex_any(LEXER *l)
 		}
 
 		l->f = NULL;
+		dump_lexer(l);
 		return token(T_ERROR, NULL);
 	}
 
@@ -356,66 +391,411 @@ static TOKEN lex_wildcard(LEXER *l)
 	return token(T_ERROR, NULL);
 }
 
-int pgr_configure(CONTEXT *c, FILE *io, int reload)
+LEXER* lexer_init(const char *file, FILE *io)
 {
-	LEXER l = {
-		.file  = strdup("<io>"),
-		.line  = 1,
-		.col   = 0,
-		.pos   = 0,
-		.start = 0,
-		.f     = lex_any,
-	};
-
+	/* how much stuff is in *io ? */
 	int off = fseek(io, 0, SEEK_END);
 	if (off < 0) {
-		return -1;
+		return NULL;
 	}
-
 	long size = ftell(io);
 	if (size < 0) {
-		return -1;
+		return NULL;
 	}
-
-	if (size > INT_MAX) {
-		/* FIXME: need an E* code here for errno... */
-		return -1;
-	}
-
-	l.max = (int)size;
 	if (fseek(io, off, SEEK_SET) < 0) {
-		return -1;
+		return NULL;
 	}
 
-	l.src = calloc(l.max, sizeof(char));
-	if (!l.src) {
-		return -1;
+	/* is it too much stuff? */
+	if (size > INT_MAX) {
+		errno = EFBIG;
+		return NULL;
 	}
 
+
+	/* set up the LEXER state */
+	LEXER *l = malloc(sizeof(LEXER));
+	if (!l) {
+		return NULL;
+	}
+	l->file = strdup(file);
+	l->line = l->col   = 0;
+	l->pos  = l->start = 0;
+	l->f    = lex_any;
+	l->max  = (int)size;
+	l->src  = calloc(l->max, sizeof(char));
+	if (!l->src) {
+		free(l);
+		return NULL;
+	}
+
+	/* read in from the file */
 	size_t n;
-	int pos = 0, left = l.max;
-	while ((n = fread(l.src + pos, left, sizeof(char), io)) > 0) {
+	int pos = 0, left = l->max;
+	while ((n = fread(l->src + pos, left, sizeof(char), io)) > 0) {
 		left -= n;
 		pos  += n;
 	}
 
-	/* FIXME: this is terribly wrong */
-	TOKEN t;
-	char buf[256];
-	int deadline = 80;
-	do {
-		dump(&l);
-		t = emit(&l);
-		if (t.value != NULL) {
-			size_t n = (t.length > 255 ? 255 : t.length);
-			memcpy(buf, t.value, n);
-			buf[n] = '\0';
-		} else {
-			buf[0] = '\0';
+	return l;
+}
+
+static char* as_string(TOKEN *t)
+{
+	char *s;
+	const char *p;
+	int left, len;
+
+	switch (t->type) {
+	case T_TYPE_BAREWORD:
+	case T_TYPE_ADDRESS:
+		s = calloc(t->length + 1, sizeof(char));
+		if (!s) {
+			return NULL;
 		}
-		fprintf(stderr, "got a [%d] token (%s)\n", t.type, buf);
-	} while (t.type != T_EOS && t.type != T_ERROR && deadline-- > 0);
+		strncpy(s, t->value, t->length);
+		return s;
+
+	case T_TYPE_QSTRING:
+		len = 0;
+		left = t->length;
+
+		for (p = t->value; left > 0; left--, p++) {
+			if (*p == '\\') {
+				left--;
+				p++;
+			}
+			len++;
+		}
+		s = calloc(len + 1, sizeof(char));
+		if (!s) {
+			return NULL;
+		}
+
+		len = 0;
+		left = t->length;
+		for (p = t->value; left > 0; left--, p++) {
+			if (*p == '\\') {
+				left--;
+				p++;
+				switch (*p) {
+				case 't':  s[len++] = '\t';
+				case 'r':  s[len++] = '\r';
+				case 'n':  s[len++] = '\n';
+				case '\\':
+				case '\'':
+				case '"':
+					s[len++] = *p;
+				defaut:
+					// FIXME: complain!
+					s[len++] = *p;
+				}
+				continue;
+			}
+
+			s[len++] = *p;
+		}
+		return s;
+
+	default:
+		return NULL;
+	}
+}
+
+static int as_int(TOKEN *t)
+{
+	switch (t->type) {
+	case T_TYPE_INTEGER:
+	case T_TYPE_TIME:
+	case T_TYPE_SIZE:
+		return t->semval.i;
+
+	default:
+		return -77;
+	}
+}
+
+static int parse(PARSER *p)
+{
+	while (p->f && p->f(p) == 0)
+		;
 	return 0;
+}
+
+static int parse_backend(PARSER *p);
+static int parse_health(PARSER *p);
+static int parse_tls(PARSER *p);
+
+static int parse_top(PARSER *p)
+{
+	TOKEN t1, t2;
+	char *s;
+	int i;
+
+	t1 = emit(p->l);
+	switch (t1.type) {
+	case T_KEYWORD_LISTEN:
+	case T_KEYWORD_MONITOR:
+	case T_KEYWORD_HBA:
+	case T_KEYWORD_USER:
+	case T_KEYWORD_GROUP:
+	case T_KEYWORD_PIDFILE:
+		t2 = emit(p->l);
+		s = as_string(&t2);
+		if (!s) {
+			return -1;
+		}
+		switch (t1.type) {
+		case T_KEYWORD_LISTEN:   printf("listen on '%s'\n", s);      break;
+		case T_KEYWORD_MONITOR:  printf("monitor on '%s'\n", s);     break;
+		case T_KEYWORD_HBA:      printf("hba file is at '%s'\n", s); break;
+		case T_KEYWORD_USER:     printf("run as user '%s'\n", s);    break;
+		case T_KEYWORD_GROUP:    printf("run as group '%s'\n", s);   break;
+		case T_KEYWORD_PIDFILE:  printf("pid file is at '%s'\n", s); break;
+		}
+		return 0;
+
+	case T_KEYWORD_LOG:
+		t2 = emit(p->l);
+		switch (t2.type) {
+		case T_KEYWORD_ERROR: printf("log level is ERROR\n"); break;
+		case T_KEYWORD_INFO:  printf("log level is INFO\n");  break;
+		case T_KEYWORD_DEBUG: printf("log level is DEBUG\n"); break;
+		default:
+			printf("bad log level\n");
+			return 1;
+		}
+		return 0;
+
+	case T_KEYWORD_WORKERS:
+		t2 = emit(p->l);
+		dump_token(&t2);
+		i = as_int(&t2);
+		if (i < 1) {
+			printf("invalid number of workers (%d)!\n", i);
+			return -1;
+		}
+		printf("spin up %d workers\n", i);
+		return 0;
+
+	case T_KEYWORD_TLS:
+		t2 = emit(p->l);
+		if (t2.type != T_OPEN) {
+			printf("bad follow-on to tls\n");
+			return -1;
+		}
+		p->f = parse_tls;
+		return 0;
+
+	case T_KEYWORD_HEALTH:
+		t2 = emit(p->l);
+		if (t2.type != T_OPEN) {
+			printf("bad follow-on to health\n");
+			return -1;
+		}
+		p->f = parse_health;
+		return 0;
+
+	case T_KEYWORD_BACKEND:
+		t2 = emit(p->l);
+		if (t2.type == T_KEYWORD_DEFAULT) {
+			free(p->backend);
+			p->backend = NULL;
+
+		} else {
+			s = as_string(&t2);
+			if (!s) {
+				printf("bad backend scope!\n");
+				return -1;
+			}
+
+			free(p->backend);
+			p->backend = s;
+		}
+		printf("=== backend %s ====\n", p->backend ? p->backend : "defaults");
+
+		t2 = emit(p->l);
+		if (t2.type != T_OPEN) {
+			printf("bad follow-on to backend\n");
+			return -1;
+		}
+		p->f = parse_backend;
+		return 0;
+
+	case T_EOS:
+		p->f = NULL;
+		return 0;
+
+	default:
+		dump_token(&t1);
+		fprintf(stderr, "bad toplevel\n");
+		return 1;
+	}
+}
+
+static int parse_backend(PARSER *p)
+{
+	TOKEN t1, t2;
+	char *s;
+	int i;
+
+	t1 = emit(p->l);
+	switch (t1.type) {
+	case T_KEYWORD_TLS:
+		t2 = emit(p->l);
+		switch (t2.type) {
+		case T_KEYWORD_ON:
+			printf("use TLS for %s backend\n",
+			       p->backend ? p->backend : "default");
+			break;
+
+		case T_KEYWORD_OFF:
+			printf("no TLS for %s backend\n",
+			       p->backend ? p->backend : "default");
+			break;
+
+		case T_KEYWORD_SKIPVERIFY:
+			printf("use (unverified) TLS for %s backend\n",
+			       p->backend ? p->backend : "default");
+			break;
+
+		default:
+			printf("bad! bad bad bad!\n");
+			return 1;
+		}
+		return 0;
+
+	case T_KEYWORD_LAG:
+	case T_KEYWORD_WEIGHT:
+		t2 = emit(p->l);
+		i = as_int(&t2);
+		if (i < 1) {
+			printf("invalid number (%d)!\n", i);
+			return -1;
+		}
+		switch (t1.type) {
+		case T_KEYWORD_LAG:    printf("lag %d\n", i); break;
+		case T_KEYWORD_WEIGHT: printf("weight %d\n", i);  break;
+		}
+		return 0;
+
+	case T_CLOSE:
+		p->f = parse_top;
+		return 0;
+
+	case T_TERMX:
+		return 0;
+
+	default:
+		printf("unexpected token in backend stanza\n");
+		return 1;
+	}
+	return 0;
+}
+
+static int parse_health(PARSER *p)
+{
+	TOKEN t1, t2;
+	char *s;
+	int i;
+
+	t1 = emit(p->l);
+	switch (t1.type) {
+	case T_KEYWORD_DATABASE:
+	case T_KEYWORD_USERNAME:
+	case T_KEYWORD_PASSWORD:
+		t2 = emit(p->l);
+		s = as_string(&t2);
+		if (!s) {
+			return -1;
+		}
+		switch (t1.type) {
+		case T_KEYWORD_DATABASE: printf("health check via db '%s'\n", s);  break;
+		case T_KEYWORD_USERNAME: printf("health check as user '%s'\n", s); break;
+		case T_KEYWORD_PASSWORD: printf("health check using '%s'\n", s);   break;
+		}
+		return 0;
+
+	case T_KEYWORD_TIMEOUT:
+	case T_KEYWORD_CHECK:
+		t2 = emit(p->l);
+		i = as_int(&t2);
+		if (i < 1) {
+			printf("invalid number (%d)!\n", i);
+			return -1;
+		}
+		switch (t1.type) {
+		case T_KEYWORD_TIMEOUT: printf("timeout %ds\n", i); break;
+		case T_KEYWORD_CHECK:   printf("check @%ds\n", i);  break;
+		}
+		return 0;
+
+	case T_CLOSE:
+		p->f = parse_top;
+		return 0;
+
+	default:
+		printf("unexpected token in health stanza\n");
+		return 1;
+	}
+}
+
+static int parse_tls(PARSER *p)
+{
+	TOKEN t1, t2;
+	char *s;
+
+	t1 = emit(p->l);
+	switch (t1.type) {
+	case T_KEYWORD_CIPHERS:
+	case T_KEYWORD_CERT:
+	case T_KEYWORD_KEY:
+		t2 = emit(p->l);
+		s = as_string(&t2);
+		if (!s) {
+			return -1;
+		}
+		switch (t1.type) {
+		case T_KEYWORD_CIPHERS: printf("use ciphers '%s'\n", s);     break;
+		case T_KEYWORD_CERT:    printf("cert file is at '%s'\n", s); break;
+		case T_KEYWORD_KEY:     printf("key file is at '%s'\n", s);  break;
+		}
+		break;
+
+	case T_CLOSE:
+		p->f = parse_top;
+		return 0;
+
+	default:
+		printf("unexpected token in tls stanza\n");
+		return 1;
+	}
+
+	return 0;
+}
+
+PARSER* parser_init(const char *file, FILE *io, int reload)
+{
+	PARSER *p = malloc(sizeof(PARSER));
+	if (!p) {
+		return NULL;
+	}
+
+	p->backend = NULL;
+	p->f = parse_top;
+	p->l = lexer_init(file, io);
+	if (!p->l) {
+		free(p);
+		return NULL;
+	}
+
+	return p;
+}
+
+int pgr_configure(CONTEXT *c, FILE *io, int reload)
+{
+	PARSER *p = parser_init("<io>", io, reload);
+	return parse(p);
 }
 
 #ifdef PTEST
