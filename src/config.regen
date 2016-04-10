@@ -1,0 +1,87 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+my $BASE = 256;
+sub define {
+	return sprintf("#define %-24s %d\n", $_[0], $BASE++);
+}
+sub lookup {
+	return sprintf("\t{ %-24s %-15s },\n", "$_[0],", qq("$_[1]"));
+}
+
+my @defines  = ();  # list of `#define T_BLAH ...` directives
+my @keywords = ();  # guts of a struct assignment for keyword lookup
+
+while (<DATA>) {
+	chomp;
+	my ($type, $word) = split /\s+/;
+	my $const = uc($word);
+
+	if ($type eq 'token') {
+		push @defines, define("T_${const}");
+
+	} elsif ($type eq 'keyword') {
+		push @defines, define("T_KEYWORD_${const}");
+		push @keywords, lookup("T_KEYWORD_${const}", $word);
+
+	} elsif ($type eq 'type') {
+		push @defines, define("T_TYPE_${const}");
+	}
+}
+
+$"="";
+print <<EOF
+@defines
+/* keyword lookup table */
+static struct {
+	int         value;
+	const char *match;
+} KEYWORDS[] = {
+@keywords	{-1, NULL},
+};
+EOF
+
+__DATA__
+token eos
+token restart
+token error
+token open
+token close
+token termx
+keyword backend
+keyword cert
+keyword check
+keyword ciphers
+keyword database
+keyword debug
+keyword default
+keyword error
+keyword group
+keyword hba
+keyword health
+keyword info
+keyword key
+keyword lag
+keyword listen
+keyword log
+keyword monitor
+keyword off
+keyword on
+keyword password
+keyword pidfile
+keyword skipverify
+keyword timeout
+keyword tls
+keyword user
+keyword username
+keyword weight
+keyword workers
+type bareword
+type decimal
+type integer
+type address
+type time
+type size
+type qstring

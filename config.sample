@@ -1,0 +1,37 @@
+# pgrouter.conf
+
+listen *:5432
+monitor 127.0.0.1:9881
+workers 64
+hba /path/to/hba
+
+tls {
+  ciphers ALL:!EXP:!LOW
+  cert /path/to/pem
+  key  /path/to/pem
+}
+
+user  vcap
+group vcap
+pidfile /var/vcap/sys/run/pgrouter/pgrouter.pid
+log INFO
+
+health {
+  timeout 5s
+  check 15s
+  database postgres
+  username pgtest
+  password "sekrit squirrel"
+}
+
+backend default {
+  tls skipverify;
+  lag 200
+  weight 100
+}
+backend 10.0.0.5:6432 { lag 800; }
+backend 10.0.0.6:6432
+
+backend default { tls off }
+backend 10.0.0.7:6432 { weight 125; lag 500b }
+backend 10.0.0.8:6432 { weight 250 }
