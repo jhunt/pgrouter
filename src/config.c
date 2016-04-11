@@ -10,7 +10,7 @@
 #define C_NUMERIC "0123456789"
 #define C_ALPHANUMERIC C_ALPHA C_NUMERIC
 
-#include "config.inc"
+#include "config.gen.c"
 
 typedef struct {
 	int value;
