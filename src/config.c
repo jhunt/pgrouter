@@ -580,6 +580,7 @@ static char* as_string(TOKEN *t)
 				case '\'':
 				case '"':
 					s[len++] = *p;
+					break;
 				defaut:
 					// FIXME: complain!
 					s[len++] = *p;
