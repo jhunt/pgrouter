@@ -139,10 +139,15 @@ static const char* token_name(int type)
 	return "(unknown)";
 }
 
+static int bound(int x, int lo, int hi)
+{
+	return (x < lo ? lo : x > hi ? hi : x);
+}
+
 static void dump_token(TOKEN *t)
 {
 	char buf[256];
-	int n = (t->length > 255 ? 255 : t->length);
+	int n = bound(t->length, 0, 255);
 	strncpy(buf, t->value, n);
 	buf[n] = '\0';
 	fprintf(stderr, "[token]: {%s(%d), '%s', %d}\n",
@@ -152,7 +157,7 @@ static void dump_token(TOKEN *t)
 static void dump_lexer(LEXER *l)
 {
 	char buf[256];
-	int n = (l->pos - l->start > 255 ? 255 : l->pos - l->start);
+	int n = bound(l->pos - l->start, 0, 255);
 	strncpy(buf, l->src + l->start, n);
 	buf[n] = '\0';
 	fprintf(stderr, "[lexer]: at %s:%d:%d, %d/%d s=%d '%s'\n",
@@ -195,7 +200,8 @@ static char peek(LEXER *l)
 
 static int accept_one(LEXER *l, const char *valid)
 {
-	if (strchr(valid, next(l)) != NULL) {
+	char c = next(l);
+	if (c != 0 && strchr(valid, c) != NULL) {
 		return 1;
 	}
 	backup(l);
@@ -335,7 +341,7 @@ static TOKEN lex_bareword(LEXER *l)
 
 static TOKEN lex_comment(LEXER *l)
 {
-	while (next(l) != '\n')
+	while (strchr("\0\n", next(l)) == NULL)
 		;
 	l->line++;
 	ignore(l);
@@ -377,6 +383,9 @@ static TOKEN lex_numeric(LEXER *l)
 
 	for (;;) {
 		c = next(l);
+		if (c == 0) {
+			break;
+		}
 		if (strchr(C_NUMERIC, c) == NULL) {
 			backup(l);
 			break;
@@ -390,6 +399,9 @@ static TOKEN lex_numeric(LEXER *l)
 		double fval = ival;
 		for (;;) {
 			c = next(l);
+			if (c == 0) {
+				break;
+			}
 			if (strchr(C_NUMERIC, c) == NULL) {
 				backup(l);
 				break;
@@ -449,6 +461,9 @@ static TOKEN lex_qstring(LEXER *l)
 	q = next(l);
 	for (;;) {
 		c = next(l);
+		if (c == 0) {
+			return token(T_ERROR, NULL);
+		}
 		if (c == q) {
 			break;
 		}
@@ -621,18 +636,13 @@ static struct _backend* make_backend(const char *id)
 
 static struct _backend* backend(PARSER *p, const char *id)
 {
-	/* we must always have a "default" backend */
-	if (!p->backends) {
-		p->backends = make_backend(NULL);
-	}
-
 	/* default backend */
 	if (id == NULL) {
 		return p->backends;
 	}
 
 	struct _backend *b;
-	for (b = p->current; b->next != NULL; b = b->next) {
+	for (b = p->backends; b->next != NULL; b = b->next) {
 		if (strcmp(b->next->id, id) == 0) {
 			return b->next;
 		}
@@ -688,10 +698,21 @@ static int parse_top(PARSER *p)
 
 	case T_KEYWORD_WORKERS:
 		t2 = emit(p->l);
-		i = as_int(&t2);
+		switch (t2.type) {
+		case T_TYPE_INTEGER:
+		case T_TYPE_TIME:
+		case T_TYPE_SIZE:
+			i = t2.semval.i;
+			break;
+
+		default:
+			dump_token(&t2);
+			printf("unexpected token\n");
+			return 1;
+		}
 		if (i < 1) {
 			printf("invalid number of workers (%d)!\n", i);
-			return -1;
+			return 1;
 		}
 		set_int(&p->workers, i);
 		return 0;
@@ -748,6 +769,7 @@ static int parse_top(PARSER *p)
 	default:
 		dump_token(&t1);
 		fprintf(stderr, "bad toplevel\n");
+		p->f = NULL;
 		return 1;
 	}
 }
@@ -775,17 +797,43 @@ static int parse_backend(PARSER *p)
 		return 0;
 
 	case T_KEYWORD_LAG:
+		t2 = emit(p->l);
+		switch (t2.type) {
+		case T_TYPE_INTEGER:
+		case T_TYPE_SIZE:
+			i = t2.semval.i;
+			break;
+
+		default:
+			dump_token(&t2);
+			fprintf(stderr, "unexpected token!\n");
+			return 1;
+		}
+
+		if (i < 0) {
+			fprintf(stderr, "invalid lag value: %d\n", i);
+			return 1;
+		}
+		set_int(&p->current->lag, i);
+		return 0;
+
 	case T_KEYWORD_WEIGHT:
 		t2 = emit(p->l);
-		i = as_int(&t2);
-		if (i < 1) {
-			printf("invalid number (%d)!\n", i);
-			return -1;
+		switch (t2.type) {
+		case T_TYPE_INTEGER: i = t2.semval.i;              break;
+		case T_TYPE_DECIMAL: i = (int)(t2.semval.f * 100); break;
+
+		default:
+			dump_token(&t2);
+			fprintf(stderr, "unexpected token!\n");
+			return 1;
 		}
-		switch (t1.type) {
-		case T_KEYWORD_LAG:    set_int(&p->current->lag, i);    break;
-		case T_KEYWORD_WEIGHT: set_int(&p->current->weight, i); break;
+
+		if (i < 0) {
+			printf("invalid backend weight factor: %d\n", i);
+			return 1;
 		}
+		set_int(&p->current->weight, i);
 		return 0;
 
 	case T_CLOSE:
@@ -829,10 +877,21 @@ static int parse_health(PARSER *p)
 	case T_KEYWORD_TIMEOUT:
 	case T_KEYWORD_CHECK:
 		t2 = emit(p->l);
-		i = as_int(&t2);
-		if (i < 1) {
-			printf("invalid number (%d)!\n", i);
-			return -1;
+		switch (t2.type) {
+		case T_TYPE_INTEGER:
+		case T_TYPE_TIME:
+			i = t2.semval.i;
+			break;
+
+		default:
+			dump_token(&t2);
+			fprintf(stderr, "unexpected token!\n");
+			return 1;
+		}
+
+		if (i < 0) {
+			fprintf(stderr, "invalid value: %d\n", i);
+			return 1;
 		}
 		switch (t1.type) {
 		case T_KEYWORD_TIMEOUT: set_int(&p->health_timeout, i);  break;
@@ -891,6 +950,7 @@ PARSER* parser_init(const char *file, FILE *io, int reload)
 		return NULL;
 	}
 
+	p->backends = make_backend(NULL);
 	p->f = parse_top;
 	p->l = lexer_init(file, io);
 	if (!p->l) {
