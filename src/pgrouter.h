@@ -29,9 +29,9 @@ typedef struct {
 	int weight;                 /* weight, range [0, RAND_MAX]  */
 
 	struct {
-		const char *database;   /* database to connect to       */
-		const char *username;   /* username to connect with     */
-		const char *password;   /* password to auth. with       */
+		char *database;         /* database to connect to       */
+		char *username;         /* username to connect with     */
+		char *password;         /* password to auth. with       */
 
 		lag_t lag;              /* replication lag, in bytes    */
 		lag_t threshold;        /* threshold for lag (bytes)    */
@@ -44,9 +44,6 @@ typedef struct {
 	int workers;                /* how many WORKER threads      */
 	int loglevel;               /* what messages to log         */
 
-	char *hbafile;              /* path to the HBA/ACL config.  */
-	char *pidfile;              /* path to the daemon pidfile   */
-
 	struct {
 		int interval;           /* how often to check backends  */
 		int timeout;            /* total timeout in seconds     */
@@ -57,11 +54,11 @@ typedef struct {
 	} health;
 
 	struct {
-		char *listen_host;      /* host/ip to bind              */
-		int   listen_port;      /* port to bind                 */
+		char *listen;           /* host/ip and port to bind     */
+		char *monitor;          /* host/ip and port to bind     */
 
-		char *monitor_host;     /* host/ip to bind              */
-		int   monitor_port;     /* port to bind                 */
+		char *hbafile;          /* path to the HBA/ACL config.  */
+		char *pidfile;          /* path to the daemon pidfile   */
 
 		char *tls_ciphers;      /* SSL/TLS ciphers to advert.   */
 		char *tls_certfile;     /* path to SSL/TLS certificate  */

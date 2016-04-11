@@ -4,12 +4,36 @@
 #include <string.h>
 #include <limits.h>
 #include <errno.h>
+#include <syslog.h>
 
 #define C_ALPHA   "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 #define C_NUMERIC "0123456789"
 #define C_ALPHANUMERIC C_ALPHA C_NUMERIC
 
 #include "config.inc"
+
+typedef struct {
+	int value;
+	int set;
+} intval_t;
+
+typedef struct {
+	char *value;
+	int   set;
+} strval_t;
+
+
+struct _backend {
+	char *id;
+	char *hostname;
+	int port;
+
+	intval_t tls;
+	intval_t weight;
+	intval_t lag;
+
+	struct _backend *next;
+};
 
 typedef struct {
 	int type;           /* type of token (a T_* constant)  */
@@ -43,11 +67,66 @@ typedef struct __p PARSER;
 typedef int (*parser_fn)(PARSER*);
 
 struct __p {
-	char *backend; /* current backend scope    */
+	struct _backend *backends;
+	struct _backend *current;
+
+	intval_t workers;
+	intval_t loglevel;
+
+	intval_t health_interval;
+	intval_t health_timeout;
+	strval_t health_database;
+	strval_t health_username;
+	strval_t health_password;
+
+	strval_t listen;
+	strval_t monitor;
+	strval_t hbafile;
+	strval_t pidfile;
+	strval_t tls_ciphers;
+	strval_t tls_certfile;
+	strval_t tls_keyfile;
+	strval_t user;
+	strval_t group;
 
 	LEXER *l;      /* lexer to get tokens from */
 	parser_fn f;   /* current parser function  */
 };
+
+static void set_str(strval_t *x, const char *v)
+{
+	free(x->value);
+	x->set = 1;
+	x->value = strdup(v);
+}
+
+static char* get_str(const char *a, strval_t *b, strval_t *c)
+{
+	if (c && c->set) {
+		return c->value;
+	}
+	if (b && b->set) {
+		return b->value;
+	}
+	return strdup(a);
+}
+
+static void set_int(intval_t *x, int v)
+{
+	x->set = 1;
+	x->value = v;
+}
+
+static int get_int(int a, intval_t *b, intval_t *c)
+{
+	if (c && c->set) {
+		return c->value;
+	}
+	if (b && b->set) {
+		return b->value;
+	}
+	return a;
+}
 
 static const char* token_name(int type)
 {
@@ -522,6 +601,46 @@ static int parse(PARSER *p)
 	return 0;
 }
 
+static struct _backend* make_backend(const char *id)
+{
+	struct _backend *b = calloc(1, sizeof(struct _backend));
+	if (!b) {
+		fprintf(stderr, "failed to allocate new backend: %s\n", strerror(errno));
+		return NULL;
+	}
+	if (id) {
+		b->id = strdup(id);
+		/* FIXME: parse id */
+	} else {
+		set_int(&b->tls,    BACKEND_TLS_OFF);
+		set_int(&b->weight, 1);
+		set_int(&b->lag,    100);
+	}
+	return b;
+}
+
+static struct _backend* backend(PARSER *p, const char *id)
+{
+	/* we must always have a "default" backend */
+	if (!p->backends) {
+		p->backends = make_backend(NULL);
+	}
+
+	/* default backend */
+	if (id == NULL) {
+		return p->backends;
+	}
+
+	struct _backend *b;
+	for (b = p->current; b->next != NULL; b = b->next) {
+		if (strcmp(b->next->id, id) == 0) {
+			return b->next;
+		}
+	}
+	b->next = make_backend(id);
+	return b->next;
+}
+
 static int parse_backend(PARSER *p);
 static int parse_health(PARSER *p);
 static int parse_tls(PARSER *p);
@@ -546,21 +665,21 @@ static int parse_top(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_LISTEN:   printf("listen on '%s'\n", s);      break;
-		case T_KEYWORD_MONITOR:  printf("monitor on '%s'\n", s);     break;
-		case T_KEYWORD_HBA:      printf("hba file is at '%s'\n", s); break;
-		case T_KEYWORD_USER:     printf("run as user '%s'\n", s);    break;
-		case T_KEYWORD_GROUP:    printf("run as group '%s'\n", s);   break;
-		case T_KEYWORD_PIDFILE:  printf("pid file is at '%s'\n", s); break;
+		case T_KEYWORD_LISTEN:   set_str(&p->listen, s);  break;
+		case T_KEYWORD_MONITOR:  set_str(&p->monitor, s); break;
+		case T_KEYWORD_HBA:      set_str(&p->hbafile, s); break;
+		case T_KEYWORD_USER:     set_str(&p->user, s);    break;
+		case T_KEYWORD_GROUP:    set_str(&p->group, s);   break;
+		case T_KEYWORD_PIDFILE:  set_str(&p->pidfile, s); break;
 		}
 		return 0;
 
 	case T_KEYWORD_LOG:
 		t2 = emit(p->l);
 		switch (t2.type) {
-		case T_KEYWORD_ERROR: printf("log level is ERROR\n"); break;
-		case T_KEYWORD_INFO:  printf("log level is INFO\n");  break;
-		case T_KEYWORD_DEBUG: printf("log level is DEBUG\n"); break;
+		case T_KEYWORD_ERROR: set_int(&p->loglevel, LOG_ERR);   break;
+		case T_KEYWORD_INFO:  set_int(&p->loglevel, LOG_INFO);  break;
+		case T_KEYWORD_DEBUG: set_int(&p->loglevel, LOG_DEBUG); break;
 		default:
 			printf("bad log level\n");
 			return 1;
@@ -569,13 +688,12 @@ static int parse_top(PARSER *p)
 
 	case T_KEYWORD_WORKERS:
 		t2 = emit(p->l);
-		dump_token(&t2);
 		i = as_int(&t2);
 		if (i < 1) {
 			printf("invalid number of workers (%d)!\n", i);
 			return -1;
 		}
-		printf("spin up %d workers\n", i);
+		set_int(&p->workers, i);
 		return 0;
 
 	case T_KEYWORD_TLS:
@@ -599,8 +717,7 @@ static int parse_top(PARSER *p)
 	case T_KEYWORD_BACKEND:
 		t2 = emit(p->l);
 		if (t2.type == T_KEYWORD_DEFAULT) {
-			free(p->backend);
-			p->backend = NULL;
+			p->current = backend(p, NULL);
 
 		} else {
 			s = as_string(&t2);
@@ -608,11 +725,13 @@ static int parse_top(PARSER *p)
 				printf("bad backend scope!\n");
 				return -1;
 			}
-
-			free(p->backend);
-			p->backend = s;
+			p->current = backend(p, s);
+			free(s);
 		}
-		printf("=== backend %s ====\n", p->backend ? p->backend : "defaults");
+
+		if (!p->current) {
+			return -1;
+		}
 
 		t2 = emit(p->l);
 		if (t2.type != T_OPEN) {
@@ -644,23 +763,13 @@ static int parse_backend(PARSER *p)
 	case T_KEYWORD_TLS:
 		t2 = emit(p->l);
 		switch (t2.type) {
-		case T_KEYWORD_ON:
-			printf("use TLS for %s backend\n",
-			       p->backend ? p->backend : "default");
-			break;
-
-		case T_KEYWORD_OFF:
-			printf("no TLS for %s backend\n",
-			       p->backend ? p->backend : "default");
-			break;
-
-		case T_KEYWORD_SKIPVERIFY:
-			printf("use (unverified) TLS for %s backend\n",
-			       p->backend ? p->backend : "default");
-			break;
+		case T_KEYWORD_ON:         set_int(&p->current->tls, BACKEND_TLS_VERIFY);   break;
+		case T_KEYWORD_OFF:        set_int(&p->current->tls, BACKEND_TLS_OFF);      break;
+		case T_KEYWORD_SKIPVERIFY: set_int(&p->current->tls, BACKEND_TLS_NOVERIFY); break;
 
 		default:
-			printf("bad! bad bad bad!\n");
+			dump_token(&t2);
+			fprintf(stderr, "unexpected token!\n");
 			return 1;
 		}
 		return 0;
@@ -674,8 +783,8 @@ static int parse_backend(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_LAG:    printf("lag %d\n", i); break;
-		case T_KEYWORD_WEIGHT: printf("weight %d\n", i);  break;
+		case T_KEYWORD_LAG:    set_int(&p->current->lag, i);    break;
+		case T_KEYWORD_WEIGHT: set_int(&p->current->weight, i); break;
 		}
 		return 0;
 
@@ -687,6 +796,7 @@ static int parse_backend(PARSER *p)
 		return 0;
 
 	default:
+		dump_token(&t1);
 		printf("unexpected token in backend stanza\n");
 		return 1;
 	}
@@ -710,9 +820,9 @@ static int parse_health(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_DATABASE: printf("health check via db '%s'\n", s);  break;
-		case T_KEYWORD_USERNAME: printf("health check as user '%s'\n", s); break;
-		case T_KEYWORD_PASSWORD: printf("health check using '%s'\n", s);   break;
+		case T_KEYWORD_DATABASE: set_str(&p->health_database, s); break;
+		case T_KEYWORD_USERNAME: set_str(&p->health_username, s); break;
+		case T_KEYWORD_PASSWORD: set_str(&p->health_password, s); break;
 		}
 		return 0;
 
@@ -725,8 +835,8 @@ static int parse_health(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_TIMEOUT: printf("timeout %ds\n", i); break;
-		case T_KEYWORD_CHECK:   printf("check @%ds\n", i);  break;
+		case T_KEYWORD_TIMEOUT: set_int(&p->health_timeout, i);  break;
+		case T_KEYWORD_CHECK:   set_int(&p->health_interval, i); break;
 		}
 		return 0;
 
@@ -756,9 +866,9 @@ static int parse_tls(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_CIPHERS: printf("use ciphers '%s'\n", s);     break;
-		case T_KEYWORD_CERT:    printf("cert file is at '%s'\n", s); break;
-		case T_KEYWORD_KEY:     printf("key file is at '%s'\n", s);  break;
+		case T_KEYWORD_CIPHERS: set_str(&p->tls_ciphers, s);  break;
+		case T_KEYWORD_CERT:    set_str(&p->tls_certfile, s); break;
+		case T_KEYWORD_KEY:     set_str(&p->tls_keyfile, s);  break;
 		}
 		break;
 
@@ -776,12 +886,11 @@ static int parse_tls(PARSER *p)
 
 PARSER* parser_init(const char *file, FILE *io, int reload)
 {
-	PARSER *p = malloc(sizeof(PARSER));
+	PARSER *p = calloc(1, sizeof(PARSER));
 	if (!p) {
 		return NULL;
 	}
 
-	p->backend = NULL;
 	p->f = parse_top;
 	p->l = lexer_init(file, io);
 	if (!p->l) {
@@ -794,8 +903,161 @@ PARSER* parser_init(const char *file, FILE *io, int reload)
 
 int pgr_configure(CONTEXT *c, FILE *io, int reload)
 {
+	int rc;
 	PARSER *p = parser_init("<io>", io, reload);
-	return parse(p);
+
+	rc = parse(p);
+	if (rc != 0) {
+		return rc;
+	}
+
+	/* update what can be updated */
+	if (p->workers.set) {
+		c->workers = p->workers.value;
+	}
+	if (p->loglevel.set) {
+		c->loglevel = p->loglevel.value;
+	}
+
+	if (p->health_interval.set) {
+		c->health.interval = p->health_interval.value;
+	}
+	if (p->health_timeout.set) {
+		c->health.timeout = p->health_timeout.value;
+	}
+	if (p->health_database.set) {
+		free(c->health.database);
+		c->health.database = p->health_database.value;
+	}
+	if (p->health_username.set) {
+		free(c->health.username);
+		c->health.username = p->health_username.value;
+	}
+	if (p->health_password.set) {
+		free(c->health.password);
+		c->health.password = p->health_password.value;
+	}
+
+	if (p->listen.set) {
+		if (!reload) {
+			c->startup.listen = p->listen.value;
+		} else if (strcmp(p->listen.value, c->startup.listen) != 0) {
+			fprintf(stderr, "ignoring new value for `listen %s`; retaining old value '%s'\n",
+			                p->listen.value, c->startup.listen);
+			free(p->listen.value);
+			p->listen.value = c->startup.listen;
+		}
+	}
+	if (p->monitor.set) {
+		if (!reload) {
+			c->startup.monitor = p->monitor.value;
+		} else if (strcmp(p->monitor.value, c->startup.monitor) != 0) {
+			fprintf(stderr, "ignoring new value for `monitor %s`; retaining old value '%s'\n",
+			                p->monitor.value, c->startup.monitor);
+			free(p->monitor.value);
+			p->monitor.value = c->startup.monitor;
+		}
+	}
+	if (p->hbafile.set) {
+		if (!reload) {
+			c->startup.hbafile = p->hbafile.value;
+		} else if (strcmp(p->hbafile.value, c->startup.hbafile) != 0) {
+			fprintf(stderr, "ignoring new value for `hba %s`; retaining old value '%s'\n",
+			                p->hbafile.value, c->startup.hbafile);
+			free(p->hbafile.value);
+			p->hbafile.value = c->startup.hbafile;
+		}
+	}
+	if (p->pidfile.set) {
+		if (!reload) {
+			c->startup.pidfile = p->pidfile.value;
+		} else if (strcmp(p->pidfile.value, c->startup.pidfile) != 0) {
+			fprintf(stderr, "ignoring new value for `pidfile %s`; retaining old value '%s'\n",
+			                p->pidfile.value, c->startup.pidfile);
+			free(p->pidfile.value);
+			p->pidfile.value = c->startup.pidfile;
+		}
+	}
+	if (p->tls_ciphers.set) {
+		if (!reload) {
+			c->startup.tls_ciphers = p->tls_ciphers.value;
+		} else if (strcmp(p->tls_ciphers.value, c->startup.tls_ciphers) != 0) {
+			fprintf(stderr, "ignoring new value for `tls_ciphers %s`; retaining old value '%s'\n",
+			                p->tls_ciphers.value, c->startup.tls_ciphers);
+			free(p->tls_ciphers.value);
+			p->tls_ciphers.value = c->startup.tls_ciphers;
+		}
+	}
+	if (p->tls_certfile.set) {
+		if (!reload) {
+			c->startup.tls_certfile = p->tls_certfile.value;
+		} else if (strcmp(p->tls_certfile.value, c->startup.tls_certfile) != 0) {
+			fprintf(stderr, "ignoring new value for `tls_certfile %s`; retaining old value '%s'\n",
+			                p->tls_certfile.value, c->startup.tls_certfile);
+			free(p->tls_certfile.value);
+			p->tls_certfile.value = c->startup.tls_certfile;
+		}
+	}
+	if (p->tls_keyfile.set) {
+		if (!reload) {
+			c->startup.tls_keyfile = p->tls_keyfile.value;
+		} else if (strcmp(p->tls_keyfile.value, c->startup.tls_keyfile) != 0) {
+			fprintf(stderr, "ignoring new value for `tls_keyfile %s`; retaining old value '%s'\n",
+			                p->tls_keyfile.value, c->startup.tls_keyfile);
+			free(p->tls_keyfile.value);
+			p->tls_keyfile.value = c->startup.tls_keyfile;
+		}
+	}
+	if (p->user.set) {
+		if (!reload) {
+			c->startup.user = p->user.value;
+		} else if (strcmp(p->user.value, c->startup.user) != 0) {
+			fprintf(stderr, "ignoring new value for `user %s`; retaining old value '%s'\n",
+			                p->user.value, c->startup.user);
+			free(p->user.value);
+			p->user.value = c->startup.user;
+		}
+	}
+	if (p->group.set) {
+		if (!reload) {
+			c->startup.group = p->group.value;
+		} else if (strcmp(p->group.value, c->startup.group) != 0) {
+			fprintf(stderr, "ignoring new value for `group %s`; retaining old value '%s'\n",
+			                p->group.value, c->startup.group);
+			free(p->group.value);
+			p->group.value = c->startup.group;
+		}
+	}
+
+	if (!reload) {
+		struct _backend *b;
+		c->num_backends = 0;
+		for (b = p->backends; b->next; b = b->next) {
+			c->num_backends++;
+		}
+		c->backends = calloc(c->num_backends, sizeof(BACKEND));
+		if (!c->backends) {
+			return 1;
+		}
+
+		int i;
+		struct _backend *def = p->backends;
+		b = def->next;
+		for (i = 0; i < c->num_backends; i++, b = b->next) {
+			/* FIXME: init the rwlock */
+			c->backends[i].hostname = strdup(b->id); /* FIXME! */
+			c->backends[i].port = 5432; /* FIXME! */
+
+			c->backends[i].tls              = get_int(BACKEND_TLS_OFF, &def->tls, &b->tls);
+			c->backends[i].health.threshold = get_int(BACKEND_TLS_OFF, &def->lag, &b->lag);
+			c->backends[i].weight           = get_int(BACKEND_TLS_OFF, &def->weight, &b->weight);
+			c->backends[i].health.database  = get_str("postgres", &p->health_database, NULL);
+			c->backends[i].health.username  = get_str("postgres", &p->health_username, NULL);
+			c->backends[i].health.password  = get_str("",         &p->health_password, NULL);
+		}
+	}
+
+	return 0;
 }
 
 #ifdef PTEST
@@ -812,9 +1074,50 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	if (pgr_configure(NULL, io, 0) != 0) {
+	CONTEXT c;
+	memset(&c, 0, sizeof(c));
+	if (pgr_configure(&c, io, 0) != 0) {
 		fprintf(stderr, "pgr_configure: [%d] %s\n", errno, strerror(errno));
 		return 3;
+	}
+
+	printf("# pgrouter config\n");
+	printf("listen  %s\n", c.startup.listen);
+	printf("monitor %s\n", c.startup.monitor);
+	printf("\n");
+	printf("hba %s\n", c.startup.hbafile);
+	printf("pidfile %s\n", c.startup.pidfile);
+	printf("user %s\n", c.startup.user);
+	printf("group %s\n", c.startup.group);
+	printf("\n");
+	printf("workers %d\n", c.workers);
+	printf("log %s\n", c.loglevel == LOG_DEBUG ? "DEBUG"
+	                 : c.loglevel == LOG_INFO  ? "INFO"  : "ERROR");
+	printf("\n");
+	printf("tls {\n");
+	printf("  ciphers %s\n", c.startup.tls_ciphers);
+	printf("  cert    %s\n", c.startup.tls_certfile);
+	printf("  key     %s\n", c.startup.tls_keyfile);
+	printf("}\n");
+	printf("\n");
+	printf("health {\n");
+	printf("  check    %ds\n", c.health.interval);
+	printf("  timeout  %ds\n", c.health.timeout);
+	printf("  database %s\n", c.health.database);
+	printf("  username %s\n", c.health.username);
+	printf("  password %s\n", c.health.password);
+	printf("}\n");
+	printf("\n");
+	int i;
+	for (i = 0; i < c.num_backends; i++) {
+		BACKEND b = c.backends[i];
+		printf("backend %s {\n", b.hostname);
+		printf("  tls %s\n", b.tls == BACKEND_TLS_VERIFY   ? "on"
+		                   : b.tls == BACKEND_TLS_NOVERIFY ? "skipverify" : "off");
+		printf("  weight %d\n", b.weight);
+		printf("  lag %llub\n", b.health.threshold);
+		printf("}\n");
+		printf("\n");
 	}
 
 	return 0;
