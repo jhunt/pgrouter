@@ -112,10 +112,10 @@ When connecting to the monitoring port, clients should recceive something
 that looks like this:
 
 ```
-backends 3/5\n
 workers 64\n
 clients 32\n
 connections 28\n
+backends 3/5\n
 10.0.0.3:6432 master OK 0\n
 10.0.0.1:6432 slave OK 200\n
 10.0.0.2:6432 slave OK 208\n

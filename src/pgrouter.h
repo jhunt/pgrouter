@@ -94,4 +94,7 @@ void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 /* watcher subroutines */
 void pgr_watcher(CONTEXT *c);
 
+/* monitor subroutines */
+void pgr_monitor(CONTEXT *c);
+
 #endif
