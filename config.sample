@@ -21,7 +21,7 @@ health {
   check 15s
   database postgres
   username pgtest
-  password "sekrit squirrel"
+  password "s\ekrit squirrel"
 }
 
 #backend default tls skipverify

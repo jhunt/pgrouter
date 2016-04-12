@@ -615,8 +615,9 @@ static char* as_string(TOKEN *t)
 				case '\\': s[len++] = '\\'; break;
 				case '\'': s[len++] = '\''; break;
 				case '"':  s[len++] = '"';  break;
-				defaut:
-					// FIXME: complain!
+				default:
+					pgr_logf(stderr, LOG_INFO, "handling '\\%c' as just '%c', "
+							"but you shouldn't rely on that behavior", *p, *p);
 					s[len++] = *p;
 				}
 				continue;
