@@ -61,17 +61,12 @@ static void* do_watcher(void *_c)
 {
 	int sleep_for, n;
 	CONTEXT *c = (CONTEXT*)_c;
-	int *rc = malloc(sizeof(int));
-	if (!rc) {
-		pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory during initialization: %s (errno %d)",
-				strerror(*rc), *rc);
-		return NULL;
-	}
+	int rc;
 
 	for (;;) {
-		*rc = rdlock(&c->lock, "context", 0);
-		if (*rc != 0) {
-			return (void*)rc;
+		rc = rdlock(&c->lock, "context", 0);
+		if (rc != 0) {
+			pgr_abort(ABORT_LOCK);
 		}
 
 		/* if we added or removed backends as part of a configuration
@@ -88,8 +83,7 @@ static void* do_watcher(void *_c)
 				pgr_logf(stderr, LOG_ERR, "[watcher failed to allocate memory during initialization: %s (errno %d)",
 						strerror(errno), errno);
 				unlock(&c->lock, "context", 0);
-				*rc = -1;
-				return (void*)rc;
+				pgr_abort(ABORT_MEMFAIL);
 			}
 		}
 
@@ -97,10 +91,10 @@ static void* do_watcher(void *_c)
 		   we need to while we have their respective read locks. */
 		int i;
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			*rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = rdlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				unlock(&c->lock, "context", 0);
-				return (void*)rc;
+				pgr_abort(ABORT_LOCK);
 			}
 
 			if (c->backends[i].serial != BACKENDS[i].serial) {
@@ -159,15 +153,15 @@ static void* do_watcher(void *_c)
 						i, BACKENDS[i].serial);
 			}
 
-			*rc = unlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = unlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				unlock(&c->lock, "context", 0);
-				return (void*)rc;
+				pgr_abort(ABORT_LOCK);
 			}
 		}
-		*rc = unlock(&c->lock, "context", 0);
-		if (*rc != 0) {
-			return (void*)rc;
+		rc = unlock(&c->lock, "context", 0);
+		if (rc != 0) {
+			pgr_abort(ABORT_LOCK);
 		}
 
 		/* now, loop over the backends and gather our health data */
@@ -185,11 +179,10 @@ static void* do_watcher(void *_c)
 			if (!conn) {
 				pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory for connection to %s backend",
 					BACKENDS[i].endpoint);
-				*rc = -1;
-				return (void*)rc;
+				pgr_abort(ABORT_MEMFAIL);
 			}
 
-			switch (*rc = PQstatus(conn)) {
+			switch (rc = PQstatus(conn)) {
 			case CONNECTION_BAD:
 				pgr_logf(stderr, LOG_ERR, "[watcher] failed to connect to %s backend",
 					BACKENDS[i].endpoint);
@@ -207,16 +200,16 @@ static void* do_watcher(void *_c)
 
 			default:
 				pgr_logf(stderr, LOG_ERR, "[watcher] unhandled connection status %d from backend %s",
-						*rc, BACKENDS[i].endpoint);
+						rc, BACKENDS[i].endpoint);
 				break;
 			}
 			/* FIXME: look at using PQstartConnect() with a select loop */
 		}
 
 		/* now, loop over the backends and update them with our findings */
-		*rc = wrlock(&c->lock, "context", 0);
-		if (*rc != 0) {
-			return (void*)rc;
+		rc = wrlock(&c->lock, "context", 0);
+		if (rc != 0) {
+			pgr_abort(ABORT_LOCK);
 		}
 
 		/* if num_backends changed, we may have serviced a configuration reload
@@ -234,10 +227,10 @@ static void* do_watcher(void *_c)
 
 		c->ok_backends = ok;
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			*rc = wrlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = wrlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				unlock(&c->lock, "context", 0);
-				return (void*)rc;
+				pgr_abort(ABORT_LOCK);
 			}
 
 			/* we have to check serial again, in case we serviced a less invasive
@@ -249,10 +242,10 @@ static void* do_watcher(void *_c)
 				pgr_logf(stderr, LOG_ERR, "[watcher] skipping backend/%d updates for now "
 						"(hopefully things will have settled down on the next iteration)");
 
-				*rc = unlock(&c->backends[i].lock, "backend", i);
-				if (*rc != 0) {
+				rc = unlock(&c->backends[i].lock, "backend", i);
+				if (rc != 0) {
 					unlock(&c->lock, "context", 0);
-					return (void*)rc;
+					pgr_abort(ABORT_LOCK);
 				}
 
 				continue;
@@ -264,10 +257,10 @@ static void* do_watcher(void *_c)
 					i, c->backends[i].status, (BACKENDS[i].ok ? "OK" : "FAILED"),
 					c->backends[i].health.lag);
 
-			*rc = unlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = unlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				unlock(&c->lock, "context", 0);
-				return (void*)rc;
+				pgr_abort(ABORT_LOCK);
 			}
 		}
 
@@ -276,14 +269,16 @@ static void* do_watcher(void *_c)
 		   were awake. */
 		sleep_for = c->health.interval;
 
-		*rc = unlock(&c->lock, "context", 0);
-		if (*rc != 0) {
-			return (void*)rc;
+		rc = unlock(&c->lock, "context", 0);
+		if (rc != 0) {
+			pgr_abort(ABORT_LOCK);
 		}
 
 		pgr_logf(stderr, LOG_DEBUG, "[watcher] sleeping for %d seconds", sleep_for);
 		sleep(sleep_for);
 	}
+
+	return NULL;
 }
 
 void pgr_watcher(CONTEXT *c)

@@ -1,5 +1,4 @@
 #include "pgrouter.h"
-#include <stdlib.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
@@ -63,65 +62,59 @@ static int unlock(pthread_rwlock_t *l, const char *what, int idx)
 static void* do_monitor(void *_c)
 {
 	CONTEXT *c = (CONTEXT*)_c;
-	int *rc = malloc(sizeof(int));
-	if (!rc) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to allocate memory during initialization: %s (errno %d)",
-				strerror(*rc), *rc);
-		return NULL;
-	}
+	int rc;
 
 	pgr_logf(stderr, LOG_DEBUG, "[monitor] creating an AF_INET / SOCK_STREAM socket");
 	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
 	if (sockfd < 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to create socket: %s (errno %d)",
 				strerror(errno), errno);
-		*rc = 1;
-		return (void*)rc;
+		pgr_abort(ABORT_NET);
 	}
 
 	int ena = 1;
-	*rc = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &ena, sizeof(ena));
-	if (*rc != 0) {
+	rc = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &ena, sizeof(ena));
+	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to set SO_REUSEADDR: %s (errno %d)",
 				strerror(errno), errno);
 		pgr_logf(stderr, LOG_ERR, "[monitor] (continuing, but bind may fail...)");
 	}
 
 	/* lock the CONTEXT for reading, so we can get the monitor_port */
-	*rc = rdlock(&c->lock, "context", 0);
-	if (*rc != 0) {
-		return (void*)rc;
+	rc = rdlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		pgr_abort(ABORT_LOCK);
 	}
 	struct sockaddr_in sa;
 	sa.sin_family = AF_INET;
 	sa.sin_port = htons(c->monitor_port);
 	sa.sin_addr.s_addr = INADDR_ANY; /* FIXME: use getifaddrs to enumerate local addresses */
 
-	*rc = unlock(&c->lock, "context", 0);
-	if (*rc != 0) {
-		return (void*)rc;
+	rc = unlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		pgr_abort(ABORT_LOCK);
 	}
 
-	*rc = bind(sockfd, (struct sockaddr *)(&sa), sizeof(sa));
-	if (*rc != 0) {
+	rc = bind(sockfd, (struct sockaddr *)(&sa), sizeof(sa));
+	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to bind socket: %s (errno %d)",
 				strerror(errno), errno);
-		return (void*)rc;
+		pgr_abort(ABORT_NET);
 	}
 
-	*rc = listen(sockfd, MONITOR_BACKLOG);
-	if (*rc != 0) {
+	rc = listen(sockfd, MONITOR_BACKLOG);
+	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to listen on bound socket: %s (errno %d)",
 				strerror(errno), errno);
-		return (void*)rc;
+		pgr_abort(ABORT_NET);
 	}
 
 	int connfd, i;
 	/* FIXME: we should pass a new sockaddr to accept() and log about remote clients */
 	while ((connfd = accept(sockfd, NULL, NULL)) != -1) {
 
-		*rc = rdlock(&c->lock, "context", 0);
-		if (*rc != 0) {
+		rc = rdlock(&c->lock, "context", 0);
+		if (rc != 0) {
 			close(connfd);
 			break;
 		}
@@ -132,8 +125,8 @@ static void* do_monitor(void *_c)
 		writef(connfd, "connections ??\n"); /* FIXME: get real data */
 
 		for (i = 0; i < c->num_backends; i++) {
-			*rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = rdlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				break;
 			}
 
@@ -151,14 +144,14 @@ static void* do_monitor(void *_c)
 						 c->backends[i].status == BACKEND_IS_FAILED   ? "FAILED"   : "UNKNOWN"));
 			}
 
-			*rc = unlock(&c->backends[i].lock, "backend", i);
-			if (*rc != 0) {
+			rc = unlock(&c->backends[i].lock, "backend", i);
+			if (rc != 0) {
 				break;
 			}
 		}
 
-		*rc = unlock(&c->lock, "context", 0);
-		if (*rc != 0) {
+		rc = unlock(&c->lock, "context", 0);
+		if (rc != 0) {
 			close(connfd);
 			break;
 		}
@@ -167,7 +160,7 @@ static void* do_monitor(void *_c)
 	}
 
 	close(sockfd);
-	return (void*)rc;
+	return NULL;
 }
 
 void pgr_monitor(CONTEXT *c)

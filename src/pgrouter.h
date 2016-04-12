@@ -16,9 +16,17 @@
 #define BACKEND_TLS_VERIFY   1  /* do SSL/TLS; verify certs.    */
 #define BACKEND_TLS_NOVERIFY 2  /* do SSL/TLS; skip verif.      */
 
+/* Exit codes */
+#define ABORT_UNKNOWN 1
+#define ABORT_MEMFAIL 2
+#define ABORT_LOCK    3
+#define ABORT_NET     4
+
+/* Defaults */
 #define DEFAULT_MONITOR_BIND "127.0.0.1:14231"
 #define DEFAULT_LISTEN_BIND  "*:5432"
 
+/* Hard-coded values */
 #define MONITOR_BACKLOG 64
 
 typedef unsigned long long int lag_t;
@@ -87,6 +95,9 @@ typedef struct {
 	int num_backends;           /* how many *total* backends?   */
 	BACKEND *backends;          /* the backends -- epic         */
 } CONTEXT;
+
+/* process control subroutines */
+void pgr_abort(int code);
 
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
