@@ -34,5 +34,5 @@ stamp-h?
 /aclocal.m4
 build/*
 
-/fuzz/out
+/fuzz/out*
 /t/cfgtest
