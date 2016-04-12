@@ -286,9 +286,7 @@ static void* do_watcher(void *_c)
 void pgr_watcher(CONTEXT *c)
 {
 	pthread_t tid;
-	int rc;
-
-	rc = pthread_create(&tid, NULL, do_watcher, c);
+	int rc = pthread_create(&tid, NULL, do_watcher, c);
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[watcher] failed to spin up: %s (errno %d)",
 				strerror(errno), errno);
