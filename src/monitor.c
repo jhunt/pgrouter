@@ -126,7 +126,7 @@ static void* do_monitor(void *_c)
 			break;
 		}
 
-		writef(connfd, "backends ??\n"); /* FIXME: get real data */
+		writef(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
 		writef(connfd, "workers %d\n", c->workers);
 		writef(connfd, "clients ??\n"); /* FIXME: get real data */
 		writef(connfd, "connections ??\n"); /* FIXME: get real data */

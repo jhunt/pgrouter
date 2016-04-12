@@ -171,6 +171,7 @@ static void* do_watcher(void *_c)
 		}
 
 		/* now, loop over the backends and gather our health data */
+		int ok = 0;
 		for (i = 0; i < NUM_BACKENDS; i++) {
 			BACKENDS[i].ok     = 0;
 			BACKENDS[i].master = 0;
@@ -198,6 +199,7 @@ static void* do_watcher(void *_c)
 				pgr_logf(stderr, LOG_INFO, "[watcher] connected to %s backend",
 					BACKENDS[i].endpoint);
 
+				ok++;
 				BACKENDS[i].ok = 1;
 				/* FIXME: determine if master or slave */
 				/* FIXME: determine replication offset */
@@ -230,6 +232,7 @@ static void* do_watcher(void *_c)
 			continue;
 		}
 
+		c->ok_backends = ok;
 		for (i = 0; i < NUM_BACKENDS; i++) {
 			*rc = wrlock(&c->backends[i].lock, "backend", i);
 			if (*rc != 0) {

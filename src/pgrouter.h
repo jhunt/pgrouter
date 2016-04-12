@@ -81,7 +81,8 @@ typedef struct {
 		int daemonize;          /* to daemonize or not          */
 	} startup;
 
-	int num_backends;           /* how many backends are there? */
+	int ok_backends;            /* how many healthy backends?   */
+	int num_backends;           /* how many *total* backends?   */
 	BACKEND *backends;          /* the backends -- epic         */
 } CONTEXT;
 
