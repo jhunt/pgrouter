@@ -588,9 +588,9 @@ static char* as_string(TOKEN *t)
 
 	case T_TYPE_QSTRING:
 		len = 0;
-		left = t->length;
+		left = t->length - 2; /* strip quotes */
 
-		for (p = t->value; left > 0; left--, p++) {
+		for (p = t->value + 1; left > 0; left--, p++) {
 			if (*p == '\\') {
 				left--;
 				p++;
@@ -603,8 +603,8 @@ static char* as_string(TOKEN *t)
 		}
 
 		len = 0;
-		left = t->length;
-		for (p = t->value; left > 0; left--, p++) {
+		left = t->length - 2; /* strip quotes */
+		for (p = t->value + 1; left > 0; left--, p++) {
 			if (*p == '\\') {
 				left--;
 				p++;
