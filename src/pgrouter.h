@@ -19,7 +19,9 @@
 typedef unsigned long long int lag_t;
 
 typedef struct {
-	pthread_rwlock_t rwlock;    /* read/write lock for sync.    */
+	pthread_rwlock_t lock;      /* read/write lock for sync.    */
+	int serial;                 /* increment on config reload.  */
+
 	char *hostname;             /* hostname/ip to connect to    */
 	int port;                   /* port to connect to           */
 
@@ -40,7 +42,7 @@ typedef struct {
 } BACKEND;
 
 typedef struct {
-	pthread_rwlock_t rwlock;    /* read/write lock for sync.    */
+	pthread_rwlock_t lock;      /* read/write lock for sync.    */
 
 	int workers;                /* how many WORKER threads      */
 	int loglevel;               /* what messages to log         */
@@ -87,5 +89,8 @@ int pgr_configure(CONTEXT *c, const char *file, int reload);
 void pgr_logger(int level);
 void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
+
+/* watcher subroutines */
+void pgr_watcher(CONTEXT *c);
 
 #endif

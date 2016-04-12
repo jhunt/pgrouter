@@ -1145,6 +1145,7 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 			/* FIXME: init the rwlock */
 			c->backends[i].hostname = strdup(b->id); /* FIXME! */
 			c->backends[i].port = 5432; /* FIXME! */
+			c->backends[i].serial++;
 
 			c->backends[i].tls              = get_int(BACKEND_TLS_OFF, &def->tls, &b->tls);
 			c->backends[i].health.threshold = get_int(BACKEND_TLS_OFF, &def->lag, &b->lag);
