@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <pthread.h>
+#include <syslog.h>
 
 /* Status of backends */
 #define BACKEND_IS_OK        0  /* backend is up and running    */

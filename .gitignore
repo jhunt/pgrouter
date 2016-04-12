@@ -36,3 +36,4 @@ build/*
 
 /fuzz/out*
 /t/cfgtest
+/pgrouter
