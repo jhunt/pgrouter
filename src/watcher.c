@@ -33,6 +33,18 @@ static int rdlock(pthread_rwlock_t *l, const char *what, int idx)
 	return 0;
 }
 
+static int wrlock(pthread_rwlock_t *l, const char *what, int idx)
+{
+	pgr_logf(stderr, LOG_DEBUG, "[watcher] acquiring %s/%d write lock %p", what, idx, l);
+	int rc = pthread_rwlock_wrlock(l);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "[watcher] failed to acquire %s/%d write lock: %s (errno %d)",
+				what, idx, strerror(rc), rc);
+		return rc;
+	}
+	return 0;
+}
+
 static int unlock(pthread_rwlock_t *l, const char *what, int idx)
 {
 	pgr_logf(stderr, LOG_DEBUG, "[watcher] releasing %s/%d read lock %p", what, idx, l);
@@ -200,7 +212,7 @@ static void* do_watcher(void *_c)
 		}
 
 		/* now, loop over the backends and update them with our findings */
-		*rc = rdlock(&c->lock, "context", 0);
+		*rc = wrlock(&c->lock, "context", 0);
 		if (*rc != 0) {
 			return (void*)rc;
 		}
@@ -219,7 +231,7 @@ static void* do_watcher(void *_c)
 		}
 
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			*rc = rdlock(&c->backends[i].lock, "backend", i);
+			*rc = wrlock(&c->backends[i].lock, "backend", i);
 			if (*rc != 0) {
 				unlock(&c->lock, "context", 0);
 				return (void*)rc;
