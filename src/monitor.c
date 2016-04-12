@@ -109,7 +109,7 @@ static void* do_monitor(void *_c)
 		return (void*)rc;
 	}
 
-	*rc = listen(sockfd, 64); /* FIXME: hardcoded backlog parameter */
+	*rc = listen(sockfd, MONITOR_BACKLOG);
 	if (*rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to listen on bound socket: %s (errno %d)",
 				strerror(errno), errno);

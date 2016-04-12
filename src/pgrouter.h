@@ -19,6 +19,8 @@
 #define DEFAULT_MONITOR_BIND "127.0.0.1:14231"
 #define DEFAULT_LISTEN_BIND  "*:5432"
 
+#define MONITOR_BACKLOG 64
+
 typedef unsigned long long int lag_t;
 
 typedef struct {
