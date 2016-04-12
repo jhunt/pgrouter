@@ -13,9 +13,7 @@ configuration and backend state.  Threads use mutexes and semaphores to
 safely synchronize access to the shared memory.
 
 A **SUPERVISOR** thread handles all UNIX signals, including **SIGHUP**
-(reload) and **SIGTERM** (shutdown).  It also ensures that all of the
-other threads are running, and restarts any that have terminated
-prematurely.
+(reload) and **SIGTERM** (shutdown).
 
 A **WATCHER** thread checks the health of the backend nodes, and update the
 shared dataset with availability and replication lag statistics.

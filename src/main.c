@@ -81,10 +81,11 @@ int main(int argc, char **argv)
 		return 3;
 	}
 
-	/* FIXME: spin a supervisor */
 	pgr_watcher(&c);
 	pgr_monitor(&c);
 	/* FIXME: spin the workers */
+
+	/* FIXME: handle supervisor duties in main thread */
 
 	printf("hello, pgrouter!\n");
 
