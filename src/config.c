@@ -546,7 +546,7 @@ LEXER* lexer_init(const char *file, FILE *io)
 	l->pos  = l->start = 0;
 	l->f    = lex_any;
 	l->max  = (int)size;
-	l->src  = calloc(l->max, sizeof(char));
+	l->src  = calloc(l->max + 1, sizeof(char));
 	if (!l->src) {
 		free(l);
 		return NULL;
