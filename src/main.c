@@ -82,10 +82,8 @@ int main(int argc, char **argv)
 	}
 
 	/* FIXME: spin a supervisor */
-	/* FIXME: spin a watcher */
 	pgr_watcher(&c);
-
-	/* FIXME: spin a monitor */
+	pgr_monitor(&c);
 	/* FIXME: spin the workers */
 
 	printf("hello, pgrouter!\n");

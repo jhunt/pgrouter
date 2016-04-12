@@ -16,6 +16,9 @@
 #define BACKEND_TLS_VERIFY   1  /* do SSL/TLS; verify certs.    */
 #define BACKEND_TLS_NOVERIFY 2  /* do SSL/TLS; skip verif.      */
 
+#define DEFAULT_MONITOR_BIND "127.0.0.1:14231"
+#define DEFAULT_LISTEN_BIND  "*:5432"
+
 typedef unsigned long long int lag_t;
 
 typedef struct {
@@ -43,6 +46,12 @@ typedef struct {
 
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
+
+	char *listen_host;          /* host / interface to bind     */
+	int listen_port;            /* port to bind for listener    */
+
+	char *monitor_host;         /* host / interface to bind     */
+	int monitor_port;           /* port to bind for monitor     */
 
 	int workers;                /* how many WORKER threads      */
 	int loglevel;               /* what messages to log         */
