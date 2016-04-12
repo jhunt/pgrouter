@@ -56,9 +56,10 @@ int main(int argc, char **argv)
 		}
 	}
 	switch (verbose) {
-	case 1: pgr_logger(LOG_ERR);   break;
-	case 2: pgr_logger(LOG_INFO);  break;
-	case 3: pgr_logger(LOG_DEBUG); break;
+	case  0: break;
+	case  1: pgr_logger(LOG_ERR);   break;
+	case  2: pgr_logger(LOG_INFO);  break;
+	default: pgr_logger(LOG_DEBUG); break;
 	}
 
 	pgr_logf(stderr, LOG_INFO, "pgrouter starting up");
