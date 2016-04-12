@@ -609,14 +609,12 @@ static char* as_string(TOKEN *t)
 				left--;
 				p++;
 				switch (*p) {
-				case 't':  s[len++] = '\t';
-				case 'r':  s[len++] = '\r';
-				case 'n':  s[len++] = '\n';
-				case '\\':
-				case '\'':
-				case '"':
-					s[len++] = *p;
-					break;
+				case 't':  s[len++] = '\t'; break;
+				case 'r':  s[len++] = '\r'; break;
+				case 'n':  s[len++] = '\n'; break;
+				case '\\': s[len++] = '\\'; break;
+				case '\'': s[len++] = '\''; break;
+				case '"':  s[len++] = '"';  break;
 				defaut:
 					// FIXME: complain!
 					s[len++] = *p;
