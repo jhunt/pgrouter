@@ -83,6 +83,7 @@ void pgr_xfree(void **p);
 int pgr_configure(CONTEXT *c, FILE *io, int reload);
 
 /* logging subroutines */
+void pgr_logger(int level);
 void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 

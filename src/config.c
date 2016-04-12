@@ -98,6 +98,8 @@ static void set_str(strval_t *x, const char *v)
 	free(x->value);
 	x->set = 1;
 	x->value = strdup(v);
+	pgr_logf(stderr, LOG_DEBUG, "setting string [strval_t %p] to %s (at %p)",
+			x, x->value, x->value);
 }
 
 static char* get_str(const char *a, strval_t *b, strval_t *c)
@@ -146,12 +148,8 @@ static int bound(int x, int lo, int hi)
 
 static void dump_token(TOKEN *t)
 {
-	char buf[256];
-	int n = bound(t->length, 0, 255);
-	strncpy(buf, t->value, n);
-	buf[n] = '\0';
-	fprintf(stderr, "[token]: {%s(%d), '%s', %d}\n",
-	                token_name(t->type), t->type, buf, t->length);
+	pgr_logf(stderr, LOG_DEBUG, "got a token {%s(%d), '%s', %d}\n",
+			token_name(t->type), t->type, t->value, t->length);
 }
 
 static void dump_lexer(LEXER *l)
@@ -267,6 +265,7 @@ static TOKEN lex_any(LEXER *l)
 			continue;
 		}
 
+		pgr_logf(stderr, LOG_DEBUG, "%s:%d:%d: read character '%c' [%02x]", l->file, l->line, l->col, c, c);
 		if (c == '{') {
 			ignore(l);
 			return token(T_OPEN, NULL);
@@ -285,26 +284,31 @@ static TOKEN lex_any(LEXER *l)
 		if (c == '#') {
 			l->f = lex_comment;
 			ignore(l);
+			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_comment");
 			return TRY_AGAIN;
 		}
 
 		if (c == '\'' || c == '"') {
 			l->f = lex_qstring;
+			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_qstring");
 			return TRY_AGAIN;
 		}
 
 		if (isdigit(c)) {
 			l->f = lex_numeric;
+			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_numeric");
 			return TRY_AGAIN;
 		}
 
 		if (isalnum(c) || c == '/') {
 			l->f = lex_bareword;
+			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_bareword");
 			return TRY_AGAIN;
 		}
 
 		if (c == '*') {
 			l->f = lex_wildcard;
+			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_wildcard");
 			return TRY_AGAIN;
 		}
 
@@ -341,12 +345,16 @@ static TOKEN lex_bareword(LEXER *l)
 
 static TOKEN lex_comment(LEXER *l)
 {
-	while (strchr("\0\n", next(l)) == NULL)
-		;
+	int n = 0;
+	char c;
+	for (c = next(l); c != '\0' && c != '\n'; c = next(l))
+		n++;
 	l->line++;
 	ignore(l);
+	pgr_logf(stderr, LOG_DEBUG, "consumed %d bytes", n);
 
 	l->f = lex_any;
+	pgr_logf(stderr, LOG_DEBUG, "dispatching back to lex_any");
 	return TRY_AGAIN;
 }
 
@@ -487,6 +495,8 @@ static TOKEN lex_wildcard(LEXER *l)
 
 LEXER* lexer_init(const char *file, FILE *io)
 {
+	pgr_logf(stderr, LOG_DEBUG, "intializing a new lexer for %s (io %p)", file, io);
+
 	/* how much stuff is in *io ? */
 	int off = fseek(io, 0, SEEK_END);
 	if (off < 0) {
@@ -499,9 +509,13 @@ LEXER* lexer_init(const char *file, FILE *io)
 	if (fseek(io, off, SEEK_SET) < 0) {
 		return NULL;
 	}
+	pgr_logf(stderr, LOG_DEBUG, "looks like there are %lu bytes of data to parse", size);
 
 	/* is it too much stuff? */
 	if (size > INT_MAX) {
+		pgr_logf(stderr, LOG_ERR, "%s contains %lu bytes of data; "
+				"which is higher than INT_MAX (%u); aborting",
+				size, INT_MAX);
 		errno = EFBIG;
 		return NULL;
 	}
@@ -523,14 +537,21 @@ LEXER* lexer_init(const char *file, FILE *io)
 		return NULL;
 	}
 
-	/* read in from the file */
+	pgr_logf(stderr, LOG_INFO, "lexer state initialized; reading from io %p", io);
 	size_t n;
 	int pos = 0, left = l->max;
-	while ((n = fread(l->src + pos, left, sizeof(char), io)) > 0) {
+	while ((n = fread(l->src + pos, sizeof(char), left, io)) > 0) {
 		left -= n;
 		pos  += n;
+		pgr_logf(stderr, LOG_DEBUG, "read %u bytes, current position %d/%d, %d bytes left",
+				n, pos, size, left);
 	}
-
+	pgr_logf(stderr, LOG_DEBUG, "final position %d/%d, %d bytes left",
+			pos, size, left);
+	pgr_logf(stderr, LOG_DEBUG, "src:\n```\n%s```", l->src);
+	pgr_logf(stderr, LOG_INFO, "set up to lex %s, "
+			"starting at %d:%d (position %d/%d, token at %d)",
+			l->file, l->line, l->col, l->pos, l->max, l->start);
 	return l;
 }
 
@@ -663,6 +684,7 @@ static int parse_top(PARSER *p)
 	int i;
 
 	t1 = emit(p->l);
+	dump_token(&t1);
 	switch (t1.type) {
 	case T_KEYWORD_LISTEN:
 	case T_KEYWORD_MONITOR:
@@ -1134,6 +1156,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s: [%d] %s\n", argv[1], errno, strerror(errno));
 		return 2;
 	}
+
+	pgr_logger(LOG_DEBUG);
+	pgr_logf(stderr, LOG_INFO, "cfgtest starting up...");
 
 	CONTEXT c;
 	memset(&c, 0, sizeof(c));
