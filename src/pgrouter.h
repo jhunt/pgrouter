@@ -80,7 +80,7 @@ void pgr_xfree(void **p);
 #define pgr_free(p) (pgr_xfree(&(p)))
 
 /* configuration subroutines */
-int pgr_configure(CONTEXT *c, FILE *io, int reload);
+int pgr_configure(CONTEXT *c, const char *file, int reload);
 
 /* logging subroutines */
 void pgr_logger(int level);

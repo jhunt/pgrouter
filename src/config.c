@@ -98,8 +98,6 @@ static void set_str(strval_t *x, const char *v)
 	free(x->value);
 	x->set = 1;
 	x->value = strdup(v);
-	pgr_logf(stderr, LOG_DEBUG, "setting string [strval_t %p] to %s (at %p)",
-			x, x->value, x->value);
 }
 
 static char* get_str(const char *a, strval_t *b, strval_t *c)
@@ -148,8 +146,32 @@ static int bound(int x, int lo, int hi)
 
 static void dump_token(TOKEN *t)
 {
-	pgr_logf(stderr, LOG_DEBUG, "got a token {%s(%d), '%s', %d}\n",
-			token_name(t->type), t->type, t->value, t->length);
+	char buf[256];
+	int i, j;
+	for (i = 0, j = 0; i < 255 && j < t->length; j++) {
+		switch (t->value[j]) {
+		case '\n':
+		case '\r':
+		case '\t':
+			if (i > 253) {
+				goto done;
+			}
+			buf[i++] = '\\';
+			switch(t->value[j]) {
+			case '\n': buf[i++] = 'n'; break;
+			case '\r': buf[i++] = 'r'; break;
+			case '\t': buf[i++] = 't'; break;
+			}
+			break;
+
+		default:
+			buf[i++] = t->value[j];
+		}
+	}
+done:
+	buf[i] = '\0';
+	pgr_logf(stderr, LOG_DEBUG, "got a token {%s(%d), '%s', %d}",
+			token_name(t->type), t->type, buf, t->length);
 }
 
 static void dump_lexer(LEXER *l)
@@ -158,7 +180,7 @@ static void dump_lexer(LEXER *l)
 	int n = bound(l->pos - l->start, 0, 255);
 	strncpy(buf, l->src + l->start, n);
 	buf[n] = '\0';
-	fprintf(stderr, "[lexer]: at %s:%d:%d, %d/%d s=%d '%s'\n",
+	pgr_logf(stderr, LOG_DEBUG, "lexer at %s:%d:%d, %d/%d s=%d '%s'",
 	                l->file, l->line, l->col,
 	                l->pos, l->max, l->start,
 	                buf);
@@ -234,6 +256,7 @@ static TOKEN emit(LEXER *l)
 		if (t.type == T_RESTART) {
 			continue;
 		}
+		dump_token(&t);
 		return t;
 	}
 }
@@ -265,7 +288,6 @@ static TOKEN lex_any(LEXER *l)
 			continue;
 		}
 
-		pgr_logf(stderr, LOG_DEBUG, "%s:%d:%d: read character '%c' [%02x]", l->file, l->line, l->col, c, c);
 		if (c == '{') {
 			ignore(l);
 			return token(T_OPEN, NULL);
@@ -284,31 +306,26 @@ static TOKEN lex_any(LEXER *l)
 		if (c == '#') {
 			l->f = lex_comment;
 			ignore(l);
-			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_comment");
 			return TRY_AGAIN;
 		}
 
 		if (c == '\'' || c == '"') {
 			l->f = lex_qstring;
-			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_qstring");
 			return TRY_AGAIN;
 		}
 
 		if (isdigit(c)) {
 			l->f = lex_numeric;
-			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_numeric");
 			return TRY_AGAIN;
 		}
 
 		if (isalnum(c) || c == '/') {
 			l->f = lex_bareword;
-			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_bareword");
 			return TRY_AGAIN;
 		}
 
 		if (c == '*') {
 			l->f = lex_wildcard;
-			pgr_logf(stderr, LOG_DEBUG, "dispatching to lex_wildcard");
 			return TRY_AGAIN;
 		}
 
@@ -351,10 +368,8 @@ static TOKEN lex_comment(LEXER *l)
 		n++;
 	l->line++;
 	ignore(l);
-	pgr_logf(stderr, LOG_DEBUG, "consumed %d bytes", n);
 
 	l->f = lex_any;
-	pgr_logf(stderr, LOG_DEBUG, "dispatching back to lex_any");
 	return TRY_AGAIN;
 }
 
@@ -684,7 +699,6 @@ static int parse_top(PARSER *p)
 	int i;
 
 	t1 = emit(p->l);
-	dump_token(&t1);
 	switch (t1.type) {
 	case T_KEYWORD_LISTEN:
 	case T_KEYWORD_MONITOR:
@@ -790,7 +804,6 @@ static int parse_top(PARSER *p)
 		return 0;
 
 	default:
-		dump_token(&t1);
 		fprintf(stderr, "bad toplevel\n");
 		p->f = NULL;
 		return 1;
@@ -813,7 +826,6 @@ static int parse_backend(PARSER *p)
 		case T_KEYWORD_SKIPVERIFY: set_int(&p->current->tls, BACKEND_TLS_NOVERIFY); break;
 
 		default:
-			dump_token(&t2);
 			fprintf(stderr, "unexpected token!\n");
 			return 1;
 		}
@@ -828,7 +840,6 @@ static int parse_backend(PARSER *p)
 			break;
 
 		default:
-			dump_token(&t2);
 			fprintf(stderr, "unexpected token!\n");
 			return 1;
 		}
@@ -847,7 +858,6 @@ static int parse_backend(PARSER *p)
 		case T_TYPE_DECIMAL: i = (int)(t2.semval.f * 100); break;
 
 		default:
-			dump_token(&t2);
 			fprintf(stderr, "unexpected token!\n");
 			return 1;
 		}
@@ -867,7 +877,6 @@ static int parse_backend(PARSER *p)
 		return 0;
 
 	default:
-		dump_token(&t1);
 		printf("unexpected token in backend stanza\n");
 		return 1;
 	}
@@ -907,7 +916,6 @@ static int parse_health(PARSER *p)
 			break;
 
 		default:
-			dump_token(&t2);
 			fprintf(stderr, "unexpected token!\n");
 			return 1;
 		}
@@ -984,10 +992,17 @@ PARSER* parser_init(const char *file, FILE *io, int reload)
 	return p;
 }
 
-int pgr_configure(CONTEXT *c, FILE *io, int reload)
+int pgr_configure(CONTEXT *c, const char *file, int reload)
 {
 	int rc;
-	PARSER *p = parser_init("<io>", io, reload);
+	FILE *io = stdin;
+	if (strcmp(file, "-") != 0) {
+		io = fopen(file, "r");
+		if (!io) {
+			return 1;
+		}
+	}
+	PARSER *p = parser_init(file, io, reload);
 
 	rc = parse(p);
 	if (rc != 0) {
@@ -1151,18 +1166,12 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	FILE *io = fopen(argv[1], "r");
-	if (!io) {
-		fprintf(stderr, "%s: [%d] %s\n", argv[1], errno, strerror(errno));
-		return 2;
-	}
-
 	pgr_logger(LOG_DEBUG);
 	pgr_logf(stderr, LOG_INFO, "cfgtest starting up...");
 
 	CONTEXT c;
 	memset(&c, 0, sizeof(c));
-	if (pgr_configure(&c, io, 0) != 0) {
+	if (pgr_configure(&c, argv[1], 0) != 0) {
 		fprintf(stderr, "pgr_configure: [%d] %s\n", errno, strerror(errno));
 		return 3;
 	}
