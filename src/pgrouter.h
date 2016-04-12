@@ -84,6 +84,7 @@ void pgr_xfree(void **p);
 
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
+int pgr_context(CONTEXT *c);
 
 /* logging subroutines */
 void pgr_logger(int level);

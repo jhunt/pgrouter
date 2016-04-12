@@ -8,7 +8,7 @@ bin_PROGRAMS = t/cfgtest \
 t_cfgtest_SOURCES = src/config.c src/log.c
 t_cfgtest_CFLAGS = -DPTEST
 
-pgrouter_SOURCES = src/config.c src/log.c \
+pgrouter_SOURCES = src/config.c src/log.c src/init.c \
                    src/watcher.c \
                    src/main.c
 pgrouter_LDADD = -lpthread -lpq

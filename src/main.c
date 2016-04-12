@@ -74,14 +74,12 @@ int main(int argc, char **argv)
 		return 2;
 	}
 
-	/*
-	rc = init_context(&c);
+	int rc = pgr_context(&c);
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to initialize a new context: %s (errno %d)",
 				strerror(errno), errno);
 		return 3;
 	}
-	*/
 
 	/* FIXME: spin a supervisor */
 	/* FIXME: spin a watcher */
