@@ -1,3 +1,4 @@
+#include "pgrouter.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <stdlib.h>
@@ -39,20 +40,17 @@ static void _vlogf(FILE *io, const char *fmt, va_list ap)
 	time_t now = time(NULL);
 
 	if (gmtime_r(&now, &t) == NULL) {
-		/* FIXME: some kind of error? */
-		return;
+		pgr_abort(ABORT_UNKNOWN);
 	}
 
 	n = strftime(tstamp, sizeof(tstamp), "%c", &t);
 	if (n < 0) {
-		/* FIXME: some kind of error? */
-		return;
+		pgr_abort(ABORT_UNKNOWN);
 	}
 
 	n = vasprintf(&msg, fmt, ap);
 	if (n < 0) {
-		/* FIXME: some kind of error? */
-		return;
+		pgr_abort(ABORT_MEMFAIL);
 	}
 
 	fprintf(io, "[%s] %s\n", tstamp, msg);

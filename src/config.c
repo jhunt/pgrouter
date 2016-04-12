@@ -1141,7 +1141,6 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		struct _backend *def = p->backends;
 		b = def->next;
 		for (i = 0; i < c->num_backends; i++, b = b->next) {
-			/* FIXME: init the rwlock */
 			c->backends[i].hostname = strdup(b->id); /* FIXME! */
 			c->backends[i].port = 5432; /* FIXME! */
 			c->backends[i].serial++;
