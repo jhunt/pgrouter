@@ -88,12 +88,6 @@ typedef struct {
 	BACKEND *backends;          /* the backends -- epic         */
 } CONTEXT;
 
-/* memory allocation subroutines */
-void *pgr_alloc(size_t bytes);
-#define pgr_make(t) (pgr_alloc(sizeof(t)))
-void pgr_xfree(void **p);
-#define pgr_free(p) (pgr_xfree(&(p)))
-
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
 int pgr_context(CONTEXT *c);
