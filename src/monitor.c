@@ -62,56 +62,9 @@ static int unlock(pthread_rwlock_t *l, const char *what, int idx)
 static void* do_monitor(void *_c)
 {
 	CONTEXT *c = (CONTEXT*)_c;
-	int rc;
-
-	pgr_logf(stderr, LOG_DEBUG, "[monitor] creating an AF_INET / SOCK_STREAM socket");
-	int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-	if (sockfd < 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to create socket: %s (errno %d)",
-				strerror(errno), errno);
-		pgr_abort(ABORT_NET);
-	}
-
-	int ena = 1;
-	rc = setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, &ena, sizeof(ena));
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to set SO_REUSEADDR: %s (errno %d)",
-				strerror(errno), errno);
-		pgr_logf(stderr, LOG_ERR, "[monitor] (continuing, but bind may fail...)");
-	}
-
-	/* lock the CONTEXT for reading, so we can get the monitor_port */
-	rc = rdlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		pgr_abort(ABORT_LOCK);
-	}
-	struct sockaddr_in sa;
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(c->monitor_port);
-	sa.sin_addr.s_addr = INADDR_ANY; /* FIXME: use getifaddrs to enumerate local addresses */
-
-	rc = unlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		pgr_abort(ABORT_LOCK);
-	}
-
-	rc = bind(sockfd, (struct sockaddr *)(&sa), sizeof(sa));
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to bind socket: %s (errno %d)",
-				strerror(errno), errno);
-		pgr_abort(ABORT_NET);
-	}
-
-	rc = listen(sockfd, MONITOR_BACKLOG);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to listen on bound socket: %s (errno %d)",
-				strerror(errno), errno);
-		pgr_abort(ABORT_NET);
-	}
-
-	int connfd, i;
+	int rc, connfd, i;
 	/* FIXME: we should pass a new sockaddr to accept() and log about remote clients */
-	while ((connfd = accept(sockfd, NULL, NULL)) != -1) {
+	while ((connfd = accept(c->monitor, NULL, NULL)) != -1) {
 
 		rc = rdlock(&c->lock, "context", 0);
 		if (rc != 0) {
@@ -159,19 +112,18 @@ static void* do_monitor(void *_c)
 		close(connfd);
 	}
 
-	close(sockfd);
+	close(c->monitor);
 	return NULL;
 }
 
-void pgr_monitor(CONTEXT *c)
+int pgr_monitor(CONTEXT *c, pthread_t *tid)
 {
-	pthread_t tid;
-	int rc = pthread_create(&tid, NULL, do_monitor, c);
+	int rc = pthread_create(tid, NULL, do_monitor, c);
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[monitor] failed to spin up: %s (errno %d)",
 				strerror(errno), errno);
 		return;
 	}
 
-	pgr_logf(stderr, LOG_INFO, "[monitor] spinning up [tid=%i]", tid);
+	pgr_logf(stderr, LOG_INFO, "[monitor] spinning up [tid=%i]", *tid);
 }

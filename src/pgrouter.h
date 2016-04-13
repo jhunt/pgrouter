@@ -23,11 +23,12 @@
 #define ABORT_NET     4
 
 /* Defaults */
-#define DEFAULT_MONITOR_BIND "127.0.0.1:14231"
-#define DEFAULT_LISTEN_BIND  "*:5432"
+#define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
+#define DEFAULT_FRONTEND_BIND "*:5432"
 
 /* Hard-coded values */
-#define MONITOR_BACKLOG 64
+#define FRONTEND_BACKLOG 64
+#define MONITOR_BACKLOG  64
 
 typedef unsigned long long int lag_t;
 
@@ -57,11 +58,8 @@ typedef struct {
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
 
-	char *listen_host;          /* host / interface to bind     */
-	int listen_port;            /* port to bind for listener    */
-
-	char *monitor_host;         /* host / interface to bind     */
-	int monitor_port;           /* port to bind for monitor     */
+	int frontend;               /* pg frontend bind/listen fd   */
+	int monitor;                /* monitoring bind/listen fd    */
 
 	int workers;                /* how many WORKER threads      */
 	int loglevel;               /* what messages to log         */
@@ -76,8 +74,8 @@ typedef struct {
 	} health;
 
 	struct {
-		char *listen;           /* host/ip and port to bind     */
-		char *monitor;          /* host/ip and port to bind     */
+		char *frontend;         /* frontend bind endpoint       */
+		char *monitor;          /* monitor bind endpoint        */
 
 		char *hbafile;          /* path to the HBA/ACL config.  */
 		char *pidfile;          /* path to the daemon pidfile   */
@@ -108,10 +106,16 @@ void pgr_logger(int level);
 void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 
+/* network subroutines */
+int pgr_listen(const char *ep, int backlog);
+
 /* watcher subroutines */
-void pgr_watcher(CONTEXT *c);
+int pgr_watcher(CONTEXT *c, pthread_t* tid);
 
 /* monitor subroutines */
-void pgr_monitor(CONTEXT *c);
+int pgr_monitor(CONTEXT *c, pthread_t* tid);
+
+/* worker subroutines */
+int pgr_worker(CONTEXT *c, pthread_t *tid);
 
 #endif

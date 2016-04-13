@@ -281,15 +281,15 @@ static void* do_watcher(void *_c)
 	return NULL;
 }
 
-void pgr_watcher(CONTEXT *c)
+int pgr_watcher(CONTEXT *c, pthread_t *tid)
 {
-	pthread_t tid;
-	int rc = pthread_create(&tid, NULL, do_watcher, c);
+	int rc = pthread_create(tid, NULL, do_watcher, c);
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "[watcher] failed to spin up: %s (errno %d)",
 				strerror(errno), errno);
-		return;
+		return 1;
 	}
 
-	pgr_logf(stderr, LOG_INFO, "[watcher] spinning up [tid=%i]", tid);
+	pgr_logf(stderr, LOG_INFO, "[watcher] spinning up [tid=%i]", *tid);
+	return 0;
 }

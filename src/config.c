@@ -1037,12 +1037,12 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 
 	if (p->listen.set) {
 		if (!reload) {
-			c->startup.listen = p->listen.value;
-		} else if (strcmp(p->listen.value, c->startup.listen) != 0) {
+			c->startup.frontend = p->listen.value;
+		} else if (strcmp(p->listen.value, c->startup.frontend) != 0) {
 			fprintf(stderr, "ignoring new value for `listen %s`; retaining old value '%s'\n",
-			                p->listen.value, c->startup.listen);
+			                p->listen.value, c->startup.frontend);
 			free(p->listen.value);
-			p->listen.value = c->startup.listen;
+			p->listen.value = c->startup.frontend;
 		}
 	}
 	if (p->monitor.set) {
@@ -1176,7 +1176,7 @@ int main(int argc, char **argv)
 	}
 
 	printf("# pgrouter config\n");
-	printf("listen  %s\n", c.startup.listen);
+	printf("listen  %s\n", c.startup.frontend);
 	printf("monitor %s\n", c.startup.monitor);
 	printf("\n");
 	printf("hba %s\n", c.startup.hbafile);

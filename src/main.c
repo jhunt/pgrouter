@@ -81,9 +81,55 @@ int main(int argc, char **argv)
 		return 3;
 	}
 
-	pgr_watcher(&c);
-	pgr_monitor(&c);
-	/* FIXME: spin the workers */
+	pgr_logf(stderr, LOG_INFO, "[super] binding frontend to %s", c.startup.frontend);
+	c.frontend = pgr_listen(c.startup.frontend, FRONTEND_BACKLOG);
+	if (c.frontend < 0) {
+		pgr_logf(stderr, LOG_ERR, "[super] failed to bind frontend [%s]: %s (errno %d)",
+				c.startup.frontend, strerror(errno), errno);
+		pgr_abort(ABORT_NET);
+	}
+
+	pgr_logf(stderr, LOG_INFO, "[super] binding monitor to %s", c.startup.monitor);
+	c.monitor = pgr_listen(c.startup.monitor, MONITOR_BACKLOG);
+	if (c.monitor < 0) {
+		pgr_logf(stderr, LOG_ERR, "[super] failed to bind monitor [%s]: %s (errno %d)",
+				c.startup.monitor, strerror(errno), errno);
+		pgr_abort(ABORT_NET);
+	}
+
+	struct {
+		pthread_t  watcher;  /* watcher thread id       */
+		pthread_t  monitor;  /* monitor thread id       */
+		pthread_t *workers;  /* worker thread ids       */
+		int        n;        /* how many worker threads */
+	} threads;
+	threads.n = c.workers;
+	threads.workers = calloc(threads.n, sizeof(pthread_t));
+	if (!threads.workers) {
+		pgr_abort(ABORT_MEMFAIL);
+	}
+
+	pgr_logf(stderr, LOG_INFO, "spinning up WATCHER thread");
+	rc = pgr_watcher(&c, &threads.watcher);
+	if (rc != 0) {
+		return 4;
+	}
+
+	pgr_logf(stderr, LOG_INFO, "spinning up MONITOR thread");
+	rc = pgr_monitor(&c, &threads.monitor);
+	if (rc != 0) {
+		return 5;
+	}
+
+
+	int i;
+	for (i = 0; i < threads.n; i++) {
+		pgr_logf(stderr, LOG_INFO, "spinning up WORKER thread #%d", i+1);
+		rc = pgr_worker(&c, &threads.workers[i]);
+		if (rc != 0) {
+			return 6;
+		}
+	}
 
 	/* FIXME: handle supervisor duties in main thread */
 
