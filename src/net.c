@@ -34,50 +34,22 @@ static int getport(const char *ep)
 	return port;
 }
 
-static in_addr_t getipv4(const char *ep)
+char* gethost(const char *ep)
 {
 	const char *p;
 	for (p = ep; *p != ':'; p++)
 		;
 
 	char *host = calloc(p - ep + 1, sizeof(char));
-	if (!host) {
-		pgr_logf(stderr, LOG_ERR, "failed to parse endpoint '%s': %s (errno %d)",
-				ep, strerror(errno), errno);
-		pgr_abort(ABORT_MEMFAIL);
+	if (host) {
+		strncpy(host, ep, p - ep);
 	}
-
-	strncpy(host, ep, p - ep);
-	/* FIXME: use getifadds to enumerate local addresses */
-	free(host);
-	return INADDR_ANY;
+	return host;
 }
 
-int pgr_listen(const char *ep, int backlog)
+static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int backlog)
 {
-	int rc, fd;
-	struct sockaddr_in sa;
-	int port;
-
-	pgr_logf(stderr, LOG_DEBUG, "parsing '%s' to get interface/address and port", ep);
-	port = getport(ep);
-	if (port < 0) {
-		return -1;
-	}
-
-	sa.sin_family = AF_INET;
-	sa.sin_port = htons(port);
-	sa.sin_addr.s_addr = getipv4(ep);
-
-	pgr_logf(stderr, LOG_DEBUG, "creating a datagram socket");
-	fd = socket(sa.sin_family, SOCK_STREAM, 0);
-	if (fd < 0) {
-		pgr_logf(stderr, LOG_ERR, "failed to create socket for [%s]: %s (errno %d)",
-				ep, strerror(errno), errno);
-		return -1;
-	}
-
-	pgr_logf(stderr, LOG_DEBUG, "setting SO_REUSEADDR socket option (non-vital)");
+	int rc;
 	int ena = 1;
 	rc = setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &ena, sizeof(ena));
 	if (rc != 0) {
@@ -86,8 +58,7 @@ int pgr_listen(const char *ep, int backlog)
 		pgr_logf(stderr, LOG_ERR, "(continuing, but bind may fail...)");
 	}
 
-	pgr_logf(stderr, LOG_DEBUG, "attempting to bind to %s", ep);
-	rc = bind(fd, (struct sockaddr*)(&sa), sizeof(sa));
+	rc = bind(fd, sa, sizeof(struct sockaddr));
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to bind socket to [%s]: %s (errno %d)",
 				ep, strerror(errno), errno);
@@ -106,4 +77,92 @@ int pgr_listen(const char *ep, int backlog)
 
 	pgr_logf(stderr, LOG_INFO, "listening on %s", ep);
 	return fd;
+}
+
+int pgr_listen4(const char *ep, int backlog)
+{
+	int rc, fd, port;
+	char *host;
+
+	port = getport(ep);
+	host = gethost(ep);
+	if (port < 0 || !host) {
+		free(host);
+		return -1;
+	}
+
+	struct sockaddr_in sa;
+	sa.sin_family = AF_INET;
+	sa.sin_port   = htons(port);
+
+	if (strcmp(host, "*") == 0) {
+		sa.sin_addr.s_addr  = INADDR_ANY;
+
+	} else {
+		rc = inet_pton(AF_INET, host, &sa.sin_addr);
+		if (rc != 1) {
+			if (rc < 0 && errno == EAFNOSUPPORT) {
+				pgr_logf(stderr, LOG_DEBUG, "pgr_listen4: ipv4 address family not supported");
+			} else {
+				pgr_logf(stderr, LOG_DEBUG, "pgr_listen4: '%s' is not an ipv4 address", host);
+			}
+			free(host);
+			return -1;
+		}
+	}
+	free(host);
+	host = NULL;
+
+	fd = socket(sa.sin_family, SOCK_STREAM, 0);
+	if (fd < 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to create an ipv4 socket for [%s]: %s (errno %d)",
+				ep, strerror(errno), errno);
+		return -1;
+	}
+
+	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
+}
+
+int pgr_listen6(const char *ep, int backlog)
+{
+	int rc, fd, port;
+	char *host;
+
+	port = getport(ep);
+	host = gethost(ep);
+	if (port < 0 || !host) {
+		free(host);
+		return -1;
+	}
+
+	struct sockaddr_in6 sa;
+	sa.sin6_family = AF_INET6;
+	sa.sin6_port   = htons(port);
+
+	if (strcmp(host, "*") == 0) {
+		sa.sin6_addr = in6addr_any;
+
+	} else {
+		rc = inet_pton(AF_INET6, host, &sa.sin6_addr);
+		if (rc != 1) {
+			if (rc < 0 && errno == EAFNOSUPPORT) {
+				pgr_logf(stderr, LOG_DEBUG, "pgr_listen6: ipv6 address family not supported");
+			} else {
+				pgr_logf(stderr, LOG_DEBUG, "pgr_listen6: '%s' is not an ipv6 address", host);
+			}
+			free(host);
+			return -1;
+		}
+	}
+	free(host);
+	host = NULL;
+
+	fd = socket(sa.sin6_family, SOCK_STREAM, 0);
+	if (fd < 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to create an ipv6 socket for [%s]: %s (errno %d)",
+				ep, strerror(errno), errno);
+		return -1;
+	}
+
+	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }

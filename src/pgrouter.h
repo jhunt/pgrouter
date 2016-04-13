@@ -107,7 +107,8 @@ void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 
 /* network subroutines */
-int pgr_listen(const char *ep, int backlog);
+int pgr_listen4(const char *ep, int backlog);
+int pgr_listen6(const char *ep, int backlog);
 
 /* watcher subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);

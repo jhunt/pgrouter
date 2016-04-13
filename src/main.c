@@ -82,18 +82,16 @@ int main(int argc, char **argv)
 	}
 
 	pgr_logf(stderr, LOG_INFO, "[super] binding frontend to %s", c.startup.frontend);
-	c.frontend = pgr_listen(c.startup.frontend, FRONTEND_BACKLOG);
+	/* FIXME: support ipv4 and ipv6 */
+	c.frontend = pgr_listen4(c.startup.frontend, FRONTEND_BACKLOG);
 	if (c.frontend < 0) {
-		pgr_logf(stderr, LOG_ERR, "[super] failed to bind frontend [%s]: %s (errno %d)",
-				c.startup.frontend, strerror(errno), errno);
 		pgr_abort(ABORT_NET);
 	}
 
 	pgr_logf(stderr, LOG_INFO, "[super] binding monitor to %s", c.startup.monitor);
-	c.monitor = pgr_listen(c.startup.monitor, MONITOR_BACKLOG);
+	/* FIXME: support ipv4 and ipv6 */
+	c.monitor = pgr_listen4(c.startup.monitor, MONITOR_BACKLOG);
 	if (c.monitor < 0) {
-		pgr_logf(stderr, LOG_ERR, "[super] failed to bind monitor [%s]: %s (errno %d)",
-				c.startup.monitor, strerror(errno), errno);
 		pgr_abort(ABORT_NET);
 	}
 
