@@ -69,7 +69,7 @@ static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int back
 	}
 
 	switch (sa->sa_family) {
-	case AF_INET:  rc = bind(fd, sa, sizeof(struct sockaddr_in6)); break;
+	case AF_INET:  rc = bind(fd, sa, sizeof(struct sockaddr_in));  break;
 	case AF_INET6: rc = bind(fd, sa, sizeof(struct sockaddr_in6)); break;
 	default:
 		pgr_logf(stderr, LOG_ERR, "unrecognized address family (%d) in call to bind_and_listen()",
@@ -109,6 +109,7 @@ int pgr_listen4(const char *ep, int backlog)
 	}
 
 	struct sockaddr_in sa;
+	memset(&sa, 0, sizeof(sa));
 	sa.sin_family = AF_INET;
 	sa.sin_port   = htons(port);
 
@@ -154,6 +155,7 @@ int pgr_listen6(const char *ep, int backlog)
 	}
 
 	struct sockaddr_in6 sa;
+	memset(&sa, 0, sizeof(sa));
 	sa.sin6_family = AF_INET6;
 	sa.sin6_port   = htons(port);
 

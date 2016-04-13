@@ -8,6 +8,7 @@ void pgr_abort(int code)
 	case ABORT_MEMFAIL: fprintf(stderr, "MEMORY ALLOCATION FAILURE; ABORTING.\n");     break;
 	case ABORT_LOCK:    fprintf(stderr, "THREAD (UN)LOCKING FAILURE; ABORTING.\n");    break;
 	case ABORT_NET:     fprintf(stderr, "UNRECOVERABLE NETWORK FAILURE; ABORTING.\n"); break;
+	case ABORT_SYSCALL: fprintf(stderr, "INTERRUPTED DURING SYSCALL; ABORTING.\n");    break;
 	default:            fprintf(stderr, "UNKNOWN FAILURE (FILE A BUG); ABORTING.\n");  break;
 	}
 	exit(code);

@@ -21,6 +21,7 @@
 #define ABORT_MEMFAIL 2
 #define ABORT_LOCK    3
 #define ABORT_NET     4
+#define ABORT_SYSCALL 5
 
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"

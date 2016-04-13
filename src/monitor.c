@@ -1,10 +1,14 @@
 #include "pgrouter.h"
 #include <string.h>
 #include <errno.h>
+#include <sys/time.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <unistd.h>
 #include <pthread.h>
+
+#define max(a,b) ((a) > (b) ? (a) : (b))
 
 static int writef(int fd, const char *fmt, ...)
 {
@@ -59,61 +63,93 @@ static int unlock(pthread_rwlock_t *l, const char *what, int idx)
 	return 0;
 }
 
+static void handle_client(CONTEXT *c, int connfd)
+{
+	int rc, i;
+
+	rc = rdlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		return;
+	}
+
+	writef(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
+	writef(connfd, "workers %d\n", c->workers);
+	writef(connfd, "clients ??\n"); /* FIXME: get real data */
+	writef(connfd, "connections ??\n"); /* FIXME: get real data */
+
+	for (i = 0; i < c->num_backends; i++) {
+		rc = rdlock(&c->backends[i].lock, "backend", i);
+		if (rc != 0) {
+			return;
+		}
+
+		if (c->backends[i].status == BACKEND_IS_OK) {
+			writef(connfd, "%s:%d %s OK %llu/%llu\n",
+					c->backends[i].hostname, c->backends[i].port,
+					(c->backends[i].master ? "master" : "slave"),
+					c->backends[i].health.lag,
+					c->backends[i].health.threshold);
+		} else {
+			writef(connfd, "%s:%d %s %s\n",
+					c->backends[i].hostname, c->backends[i].port,
+					(c->backends[i].master ? "master" : "slave"),
+					(c->backends[i].status == BACKEND_IS_STARTING ? "STARTING" :
+					 c->backends[i].status == BACKEND_IS_FAILED   ? "FAILED"   : "UNKNOWN"));
+		}
+
+		rc = unlock(&c->backends[i].lock, "backend", i);
+		if (rc != 0) {
+			return;
+		}
+	}
+
+	rc = unlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		return;
+	}
+}
+
 static void* do_monitor(void *_c)
 {
 	CONTEXT *c = (CONTEXT*)_c;
-	int rc, connfd, i;
+	int rc, connfd, i, nfds;
+	int watch[2] = { c->monitor4, c->monitor6 };
+	fd_set rfds;
+
 	/* FIXME: we should pass a new sockaddr to accept() and log about remote clients */
-	/* FIXME: handle both ipv4 and ipv6 */
-	while ((connfd = accept(c->monitor4, NULL, NULL)) != -1) {
 
-		rc = rdlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			close(connfd);
-			break;
-		}
+	for (;;) {
+		FD_ZERO(&rfds);
+		nfds = 0;
 
-		writef(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
-		writef(connfd, "workers %d\n", c->workers);
-		writef(connfd, "clients ??\n"); /* FIXME: get real data */
-		writef(connfd, "connections ??\n"); /* FIXME: get real data */
-
-		for (i = 0; i < c->num_backends; i++) {
-			rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				break;
-			}
-
-			if (c->backends[i].status == BACKEND_IS_OK) {
-				writef(connfd, "%s:%d %s OK %llu/%llu\n",
-						c->backends[i].hostname, c->backends[i].port,
-						(c->backends[i].master ? "master" : "slave"),
-						c->backends[i].health.lag,
-						c->backends[i].health.threshold);
-			} else {
-				writef(connfd, "%s:%d %s %s\n",
-						c->backends[i].hostname, c->backends[i].port,
-						(c->backends[i].master ? "master" : "slave"),
-						(c->backends[i].status == BACKEND_IS_STARTING ? "STARTING" :
-						 c->backends[i].status == BACKEND_IS_FAILED   ? "FAILED"   : "UNKNOWN"));
-			}
-
-			rc = unlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				break;
+		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
+			if (watch[i] >= 0) {
+				FD_SET(watch[i], &rfds);
+				nfds = max(watch[i], nfds);
 			}
 		}
 
-		rc = unlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			close(connfd);
-			break;
+		rc = select(nfds+1, &rfds, NULL, NULL, NULL);
+		if (rc == -1) {
+			if (errno == EINTR) {
+				continue;
+			}
+			pgr_logf(stderr, LOG_ERR, "select recived system error: %s (errno %d)",
+					strerror(errno), errno);
+			pgr_abort(ABORT_SYSCALL);
 		}
 
-		close(connfd);
+		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
+			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
+				connfd = accept(watch[i], NULL, NULL);
+				handle_client(c, connfd);
+				close(connfd);
+			}
+		}
 	}
 
 	close(c->monitor4);
+	close(c->monitor6);
 	return NULL;
 }
 
