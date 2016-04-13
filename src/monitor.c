@@ -64,7 +64,8 @@ static void* do_monitor(void *_c)
 	CONTEXT *c = (CONTEXT*)_c;
 	int rc, connfd, i;
 	/* FIXME: we should pass a new sockaddr to accept() and log about remote clients */
-	while ((connfd = accept(c->monitor, NULL, NULL)) != -1) {
+	/* FIXME: handle both ipv4 and ipv6 */
+	while ((connfd = accept(c->monitor4, NULL, NULL)) != -1) {
 
 		rc = rdlock(&c->lock, "context", 0);
 		if (rc != 0) {
@@ -112,7 +113,7 @@ static void* do_monitor(void *_c)
 		close(connfd);
 	}
 
-	close(c->monitor);
+	close(c->monitor4);
 	return NULL;
 }
 

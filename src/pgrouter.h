@@ -58,8 +58,10 @@ typedef struct {
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
 
-	int frontend;               /* pg frontend bind/listen fd   */
-	int monitor;                /* monitoring bind/listen fd    */
+	int frontend4;              /* ipv4 pg frontend socket      */
+	int frontend6;              /* ipv6 pg frontend socket      */
+	int monitor4;               /* ipv4 monitoring socket       */
+	int monitor6;               /* ipv6 monitoring socket       */
 
 	int workers;                /* how many WORKER threads      */
 	int loglevel;               /* what messages to log         */

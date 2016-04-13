@@ -58,7 +58,24 @@ static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int back
 		pgr_logf(stderr, LOG_ERR, "(continuing, but bind may fail...)");
 	}
 
-	rc = bind(fd, sa, sizeof(struct sockaddr));
+	if (sa->sa_family == AF_INET6) {
+		ena = 1;
+		rc = setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &ena, sizeof(ena));
+		if (rc != 0) {
+			pgr_logf(stderr, LOG_ERR, "failed to set IPV6_V6ONLY on [%s]: %s (errno %d)",
+					ep, strerror(errno), errno);
+			pgr_logf(stderr, LOG_ERR, "(continuing, but bind may fail...)");
+		}
+	}
+
+	switch (sa->sa_family) {
+	case AF_INET:  rc = bind(fd, sa, sizeof(struct sockaddr_in6)); break;
+	case AF_INET6: rc = bind(fd, sa, sizeof(struct sockaddr_in6)); break;
+	default:
+		pgr_logf(stderr, LOG_ERR, "unrecognized address family (%d) in call to bind_and_listen()",
+				sa->sa_family);
+		pgr_abort(ABORT_NET);
+	}
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to bind socket to [%s]: %s (errno %d)",
 				ep, strerror(errno), errno);
@@ -75,7 +92,7 @@ static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int back
 		return -1;
 	}
 
-	pgr_logf(stderr, LOG_INFO, "listening on %s", ep);
+	pgr_logf(stderr, LOG_INFO, "listening on %s (fd %d)", ep, fd);
 	return fd;
 }
 
@@ -120,6 +137,7 @@ int pgr_listen4(const char *ep, int backlog)
 		return -1;
 	}
 
+	pgr_logf(stderr, LOG_DEBUG, "binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }
 
@@ -164,5 +182,6 @@ int pgr_listen6(const char *ep, int backlog)
 		return -1;
 	}
 
+	pgr_logf(stderr, LOG_DEBUG, "binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }
