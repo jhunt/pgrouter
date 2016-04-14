@@ -174,7 +174,7 @@ static void* do_watcher(void *_c)
 
 		/* now, loop over the backends and gather our health data */
 		int master_pos;
-		int ok = 0;
+		int ok = BACKEND_IS_FAILED;
 		for (i = 0; i < NUM_BACKENDS; i++) {
 			BACKENDS[i].ok     = 0;
 			BACKENDS[i].master = 0;
@@ -213,7 +213,7 @@ static void* do_watcher(void *_c)
 				} else {
 					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
 							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -222,7 +222,7 @@ static void* do_watcher(void *_c)
 				if (PQntuples(result) != 1) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] received %d results from `%s` query on %s backend (expected just one)",
 							PQntuples(result), sql, BACKENDS[i].endpoint);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -231,7 +231,7 @@ static void* do_watcher(void *_c)
 				if (PQnfields(result) != 1) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] received %d columns in result from `%s` query on %s backend (expected just one)",
 							PQnfields(result), sql, BACKENDS[i].endpoint);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -256,7 +256,7 @@ static void* do_watcher(void *_c)
 				} else {
 					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
 							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -265,7 +265,7 @@ static void* do_watcher(void *_c)
 				if (PQntuples(result) != 1) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] received %d results from `%s` query on %s backend (expected just one)",
 							PQntuples(result), sql, BACKENDS[i].endpoint);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -274,7 +274,7 @@ static void* do_watcher(void *_c)
 				if (PQnfields(result) != 1) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] received %d columns in result from `%s` query on %s backend (expected just one)",
 							PQnfields(result), sql, BACKENDS[i].endpoint);
-					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					BACKENDS[i].ok = BACKEND_IS_HALFUP;
 					PQclear(result);
 					break;
 				}
@@ -295,7 +295,7 @@ static void* do_watcher(void *_c)
 				}
 
 				ok++;
-				BACKENDS[i].ok = 1;
+				BACKENDS[i].ok = BACKEND_IS_OK;
 				break;
 
 			default:
@@ -355,8 +355,8 @@ static void* do_watcher(void *_c)
 			c->backends[i].master = BACKENDS[i].master;
 			c->backends[i].health.lag = master_pos - BACKENDS[i].pos;
 			pgr_logf(stderr, LOG_INFO, "[watcher] updated backend/%d with status %d (%s) and lag %d (%d/%d)",
-					i, c->backends[i].status, (BACKENDS[i].ok ? "OK" : "FAILED"),
-					c->backends[i].health.lag, BACKENDS[i].pos, master_pos);
+					i, c->backends[i].status, (pgr_backend_status(BACKENDS[i].ok),
+					c->backends[i].health.lag, BACKENDS[i].pos, master_pos));
 
 			rc = unlock(&c->backends[i].lock, "backend", i);
 			if (rc != 0) {

@@ -72,8 +72,7 @@ static void handle_client(CONTEXT *c, int connfd)
 			writef(connfd, "%s:%d %s %s\n",
 					c->backends[i].hostname, c->backends[i].port,
 					(c->backends[i].master ? "master" : "slave"),
-					(c->backends[i].status == BACKEND_IS_STARTING ? "STARTING" :
-					 c->backends[i].status == BACKEND_IS_FAILED   ? "FAILED"   : "UNKNOWN"));
+					pgr_backend_status(c->backends[i].status));
 		}
 
 		rc = unlock(&c->backends[i].lock, "backend", i);

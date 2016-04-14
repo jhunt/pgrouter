@@ -10,6 +10,9 @@
 #define BACKEND_IS_OK        0  /* backend is up and running    */
 #define BACKEND_IS_STARTING  1  /* backend is still connecting  */
 #define BACKEND_IS_FAILED    2  /* backend won't connect        */
+#define BACKEND_IS_HALFUP    3  /* backend is up, but broken    */
+
+char* pgr_backend_status(int status);
 
 /* SSL/TLS behaviors */
 #define BACKEND_TLS_OFF      0  /* don't do SSL/TLS             */

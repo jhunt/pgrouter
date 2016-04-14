@@ -12,6 +12,17 @@
 
 #include "config.gen.c"
 
+char* pgr_backend_status(int status)
+{
+	switch (status) {
+	case BACKEND_IS_OK:       return "OK";
+	case BACKEND_IS_STARTING: return "STARTING";
+	case BACKEND_IS_FAILED:   return "FAILED";
+	case BACKEND_IS_HALFUP:   return "HALF-UP";
+	default:                  return "UNKNOWN";
+	}
+}
+
 typedef struct {
 	int value;
 	int set;
