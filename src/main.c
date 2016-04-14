@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <getopt.h>
+#include <signal.h>
 #include <errno.h>
 
 #define DEFAULT_CONFIG_FILE "/etc/pgrouter.conf"
@@ -107,33 +108,79 @@ int main(int argc, char **argv)
 		pgr_abort(ABORT_MEMFAIL);
 	}
 
-	pgr_logf(stderr, LOG_INFO, "spinning up WATCHER thread");
-	rc = pgr_watcher(&c, &threads.watcher);
+	sigset_t allsigs;
+	sigfillset(&allsigs);
+	rc = pthread_sigmask(SIG_BLOCK, &allsigs, NULL);
 	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "[super] failed to block signals in master thread");
 		return 4;
 	}
 
-	pgr_logf(stderr, LOG_INFO, "spinning up MONITOR thread");
-	rc = pgr_monitor(&c, &threads.monitor);
+	pgr_logf(stderr, LOG_INFO, "[super] spinning up WATCHER thread");
+	rc = pgr_watcher(&c, &threads.watcher);
 	if (rc != 0) {
 		return 5;
 	}
 
+	pgr_logf(stderr, LOG_INFO, "[super] spinning up MONITOR thread");
+	rc = pgr_monitor(&c, &threads.monitor);
+	if (rc != 0) {
+		return 6;
+	}
 
 	int i;
 	for (i = 0; i < threads.n; i++) {
-		pgr_logf(stderr, LOG_INFO, "spinning up WORKER thread #%d", i+1);
+		pgr_logf(stderr, LOG_INFO, "[super] spinning up WORKER thread #%d", i+1);
 		rc = pgr_worker(&c, &threads.workers[i]);
 		if (rc != 0) {
-			return 6;
+			return 7;
 		}
 	}
 
-	/* FIXME: handle supervisor duties in main thread */
+	/* supervisor main loop (mostly signal handling) */
+	for (;;) {
+		int sig;
+		sigset_t signals;
 
-	printf("hello, pgrouter!\n");
+		sigemptyset(&signals);
+		sigaddset(&signals, SIGTERM);
+		sigaddset(&signals, SIGINT);
+		sigaddset(&signals, SIGQUIT);
+		sigaddset(&signals, SIGHUP);
 
-	pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
-	sleep(10);
+		pgr_logf(stderr, LOG_DEBUG, "[super] waiting for a signal...");
+		rc = sigwait(&signals, &sig);
+		if (rc < 0) {
+			pgr_logf(stderr, LOG_ERR, "[super] errored while waiting for signals: %s (errno %d)",
+					strerror(errno), errno);
+			if (errno != EINTR) {
+				break;
+			}
+		}
+
+		switch (sig) {
+		case SIGTERM:
+			pgr_logf(stderr, LOG_INFO, "[super] caught SIGTERM (%d)", sig);
+			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			return 1;
+
+		case SIGINT:
+			pgr_logf(stderr, LOG_INFO, "[super] caught SIGINT (%d)", sig);
+			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			return 2;
+
+		case SIGQUIT:
+			pgr_logf(stderr, LOG_INFO, "[super] caught SIGQUIT (%d)", sig);
+			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			return 3;
+
+		case SIGHUP:
+			pgr_logf(stderr, LOG_INFO, "[super] caught SIGHUP (%d)", sig);
+			/* FIXME: reload! */
+			break;
+		}
+	}
+
+	pgr_logf(stderr, LOG_INFO, "pgrouter shutting down abnormally...");
 	return 0;
 }
