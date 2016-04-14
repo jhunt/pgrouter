@@ -5,6 +5,9 @@
 #include <pthread.h>
 #include <libpq-fe.h>
 
+#define SUBSYS "watcher"
+#include "locks.inc.c"
+
 typedef struct {
 	int serial;         /* BACKEND.serial; used to detect changes      */
 	int timeout;        /* health check connection timeout, in seconds */
@@ -20,42 +23,6 @@ typedef struct {
 
 static int NUM_BACKENDS; /* how many backends are there?               */
 static HEALTH *BACKENDS; /* health information, cached for speed       */
-
-static int rdlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[watcher] acquiring %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_rdlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[watcher] failed to acquire %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
-
-static int wrlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[watcher] acquiring %s/%d write lock %p", what, idx, l);
-	int rc = pthread_rwlock_wrlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[watcher] failed to acquire %s/%d write lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
-
-static int unlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[watcher] releasing %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_unlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[watcher] failed to release the %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
 
 static int xlog(const char *s, lag_t *lag)
 {

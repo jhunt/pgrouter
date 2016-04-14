@@ -8,6 +8,9 @@
 #include <unistd.h>
 #include <pthread.h>
 
+#define SUBSYS "monitor"
+#include "locks.inc.c"
+
 #define max(a,b) ((a) > (b) ? (a) : (b))
 
 static int writef(int fd, const char *fmt, ...)
@@ -37,30 +40,6 @@ static int writef(int fd, const char *fmt, ...)
 		return wr;
 	}
 	return n;
-}
-
-static int rdlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[monitor] acquiring %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_rdlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to acquire %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
-
-static int unlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[monitor] releasing %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_unlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[monitor] failed to release the %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
 }
 
 static void handle_client(CONTEXT *c, int connfd)
