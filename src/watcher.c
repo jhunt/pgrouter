@@ -173,7 +173,7 @@ static void* do_watcher(void *_c)
 
 				n = snprintf(BACKENDS[i].dsn, sizeof(BACKENDS[i].dsn),
 						"host=%s port=%d user=%s password='%s' dbname=%s "
-						"connect_timeout=%d application=pgrouter",
+						"connect_timeout=%d application_name=pgrouter",
 						c->backends[i].hostname, c->backends[i].port,
 						c->backends[i].health.username, c->backends[i].health.password,
 						c->backends[i].health.database, BACKENDS[i].timeout);

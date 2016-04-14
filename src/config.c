@@ -991,6 +991,34 @@ PARSER* parser_init(const char *file, FILE *io, int reload)
 	return p;
 }
 
+static int hostport(const char *s, char **host, int *port)
+{
+	const char *p;
+	for (p = s; *p && *p != ':'; p++)
+		;
+	*host = calloc(p - s + 1, sizeof(char));
+	if (!*host) {
+		pgr_abort(ABORT_MEMFAIL);
+	}
+	memcpy(*host, s, p - s);
+
+	if (!*p) {
+		*port = 5432;
+		return 0;
+	}
+
+	int i = 0;
+	for (p++; *p; p++) {
+		if (!isdigit(*p)) {
+			pgr_logf(stderr, LOG_ERR, "Invalid port specified in '%s'\n");
+			return 1;
+		}
+		i = i * 10 + (*p - '0');
+	}
+	*port = i;
+	return 0;
+}
+
 int pgr_configure(CONTEXT *c, const char *file, int reload)
 {
 	int rc;
@@ -1141,8 +1169,10 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		struct _backend *def = p->backends;
 		b = def->next;
 		for (i = 0; i < c->num_backends; i++, b = b->next) {
-			c->backends[i].hostname = strdup(b->id); /* FIXME! */
-			c->backends[i].port = 5432; /* FIXME! */
+			rc = hostport(b->id, &c->backends[i].hostname, &c->backends[i].port);
+			if (rc != 0) {
+				return 1;
+			}
 			c->backends[i].serial++;
 
 			c->backends[i].tls              = get_int(BACKEND_TLS_OFF, &def->tls, &b->tls);
