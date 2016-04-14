@@ -11,7 +11,7 @@ typedef struct {
 
 	int ok;             /* is the backend is accepting connections?    */
 	int master;         /* is the backend the write master?            */
-	lag_t lag;          /* how far behind the master is this slave?    */
+	lag_t pos;          /* xlog position for this backend (absolute)   */
 
 	char endpoint[256]; /* "<host>:<port>" string, for diagnostics     */
 	char userdb[256];   /* "<user>@<database>" string, for diagnostics */
@@ -54,6 +54,47 @@ static int unlock(pthread_rwlock_t *l, const char *what, int idx)
 				what, idx, strerror(rc), rc);
 		return rc;
 	}
+	return 0;
+}
+
+static int xlog(const char *s, lag_t *lag)
+{
+	const char *p;
+	lag_t hi = 0, lo = 0;
+
+	pgr_logf(stderr, LOG_DEBUG, "[watcher] parsing xlog value '%s'", s);
+	for (p = s; *p && *p != '/'; p++) {
+		if (*p >= '0' || *p <= '9') {
+			hi = hi * 0xf + (*p - '0');
+		} else if (*p >= 'a' || *p <= 'f') {
+			hi = hi * 0xf + (*p - 'a');
+		} else if (*p >= 'A' || *p <= 'F') {
+			hi = hi * 0xf + (*p - 'A');
+		} else {
+			pgr_logf(stderr, LOG_ERR, "[watcher] invalid character '%c' found in xlog value %s", *p, s);
+			return 1;
+		}
+	}
+
+	if (*p != '/') {
+		pgr_logf(stderr, LOG_ERR, "[watcher] malformed xlog value %s", s);
+		return 1;
+	}
+
+	for (p++; *p; p++) {
+		if (*p >= '0' || *p <= '9') {
+			lo = lo * 0xf + (*p - '0');
+		} else if (*p >= 'a' || *p <= 'f') {
+			lo = lo * 0xf + (*p - 'a');
+		} else if (*p >= 'A' || *p <= 'F') {
+			lo = lo * 0xf + (*p - 'A');
+		} else {
+			pgr_logf(stderr, LOG_ERR, "[watcher] invalid character '%c' found in xlog value %s", *p, s);
+			return 1;
+		}
+	}
+
+	*lag = (hi << 32) | lo;
 	return 0;
 }
 
@@ -165,11 +206,12 @@ static void* do_watcher(void *_c)
 		}
 
 		/* now, loop over the backends and gather our health data */
+		int master_pos;
 		int ok = 0;
 		for (i = 0; i < NUM_BACKENDS; i++) {
 			BACKENDS[i].ok     = 0;
 			BACKENDS[i].master = 0;
-			BACKENDS[i].lag    = 0;
+			BACKENDS[i].pos    = 0;
 
 			pgr_logf(stderr, LOG_INFO, "[watcher] checking backend/%d %s (connecting as %s)",
 					i, BACKENDS[i].endpoint, BACKENDS[i].userdb);
@@ -184,18 +226,109 @@ static void* do_watcher(void *_c)
 
 			switch (rc = PQstatus(conn)) {
 			case CONNECTION_BAD:
-				pgr_logf(stderr, LOG_ERR, "[watcher] failed to connect to %s backend",
-					BACKENDS[i].endpoint);
+				pgr_logf(stderr, LOG_ERR, "[watcher] failed to connect to %s backend: %s",
+					BACKENDS[i].endpoint, PQerrorMessage(conn));
 				break;
 
 			case CONNECTION_OK:
 				pgr_logf(stderr, LOG_INFO, "[watcher] connected to %s backend",
 					BACKENDS[i].endpoint);
 
+				/* determine if master or slave `SELECT pg_is_in_recovery()` */
+				PGresult *result;
+				const char *sql = "SELECT pg_is_in_recovery()";
+				result = PQexec(conn, sql);
+				if (!result) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory for result of `%s` query", sql);
+					pgr_abort(ABORT_MEMFAIL);
+				}
+				if (PQresultStatus(result) == PGRES_TUPLES_OK) {
+				} else {
+					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
+							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				/* we should get exactly 1 result from `SELECT pg_is_in_recovery()` */
+				if (PQntuples(result) != 1) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] received %d results from `%s` query on %s backend (expected just one)",
+							PQntuples(result), sql, BACKENDS[i].endpoint);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				/* that result should have exactly one field */
+				if (PQnfields(result) != 1) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] received %d columns in result from `%s` query on %s backend (expected just one)",
+							PQnfields(result), sql, BACKENDS[i].endpoint);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				char *val = PQgetvalue(result, 0, 0);
+				pgr_logf(stderr, LOG_INFO, "backend %s returned '%s' for `%s`",
+						BACKENDS[i].endpoint, val, sql);
+				BACKENDS[i].master = *val == 't' ? 0 : 1;
+				PQclear(result);
+
+				if (BACKENDS[i].master) {
+					sql = "SELECT pg_current_xlog_location()";
+				} else {
+					sql = "SELECT pg_last_xlog_receive_location()";
+				}
+				result = PQexec(conn, sql);
+				if (!result) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory for result of `%s` query", sql);
+					pgr_abort(ABORT_MEMFAIL);
+				}
+				if (PQresultStatus(result) == PGRES_TUPLES_OK) {
+				} else {
+					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
+							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				/* we should get exactly 1 result */
+				if (PQntuples(result) != 1) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] received %d results from `%s` query on %s backend (expected just one)",
+							PQntuples(result), sql, BACKENDS[i].endpoint);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				/* that result should have exactly one field */
+				if (PQnfields(result) != 1) {
+					pgr_logf(stderr, LOG_ERR, "[watcher] received %d columns in result from `%s` query on %s backend (expected just one)",
+							PQnfields(result), sql, BACKENDS[i].endpoint);
+					/* FIXME: differentiate "connected but not able to get data" scenario? */
+					PQclear(result);
+					break;
+				}
+
+				val = PQgetvalue(result, 0, 0);
+				pgr_logf(stderr, LOG_INFO, "backend %s returned '%s' for `%s`",
+						BACKENDS[i].endpoint, val, sql);
+				rc = xlog(val, &BACKENDS[i].pos);
+				if (rc != 0) {
+					PQclear(result);
+					break;
+				}
+				PQclear(result);
+
+				/* keep track of our master position for lag calculations */
+				if (BACKENDS[i].master) {
+					master_pos = BACKENDS[i].pos;
+				}
+
 				ok++;
 				BACKENDS[i].ok = 1;
-				/* FIXME: determine if master or slave */
-				/* FIXME: determine replication offset */
 				break;
 
 			default:
@@ -252,10 +385,11 @@ static void* do_watcher(void *_c)
 			}
 
 			c->backends[i].status = (BACKENDS[i].ok ? BACKEND_IS_OK : BACKEND_IS_FAILED);
-			c->backends[i].health.lag = BACKENDS[i].lag;
-			pgr_logf(stderr, LOG_INFO, "[watcher] updated backend/%d with status %d (%s) and lag %d",
+			c->backends[i].master = BACKENDS[i].master;
+			c->backends[i].health.lag = master_pos - BACKENDS[i].pos;
+			pgr_logf(stderr, LOG_INFO, "[watcher] updated backend/%d with status %d (%s) and lag %d (%d/%d)",
 					i, c->backends[i].status, (BACKENDS[i].ok ? "OK" : "FAILED"),
-					c->backends[i].health.lag);
+					c->backends[i].health.lag, BACKENDS[i].pos, master_pos);
 
 			rc = unlock(&c->backends[i].lock, "backend", i);
 			if (rc != 0) {

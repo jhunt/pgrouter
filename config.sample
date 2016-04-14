@@ -21,7 +21,10 @@ health {
   check 15s
   database postgres
   username pgtest
-  password "s\ekrit squirrel"
+  #password "s\ekrit squirrel"
+  username hedgehog
+  password frank
+  database hedgehog
 }
 
 #backend default tls skipverify
@@ -32,9 +35,12 @@ backend default {
   lag 200
   weight 100
 }
-backend 10.0.0.5:6432 { lag 800; }
-backend 10.0.0.6:6432 { }
+backend 10.244.232.2:5432 { }
+backend 10.244.232.3:5432 { }
+backend 10.244.232.4:5432 { }
+#backend 10.0.0.5:6432 { lag 800; }
+#backend 10.0.0.6:6432 { }
 
 backend default { tls off }
-backend 10.0.0.7:6432 { weight 125; lag 500b }
-backend 10.0.0.8:6432 { weight 250 }
+#backend 10.0.0.7:6432 { weight 125; lag 500b }
+#backend 10.0.0.8:6432 { weight 250 }
