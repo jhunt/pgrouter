@@ -110,7 +110,7 @@ static void* do_watcher(void *_c)
 						i, BACKENDS[i].serial, c->backends[i].serial);
 				pgr_logf(stderr, LOG_INFO, "[watcher] updating backend/%d with (potential) new connection information", i);
 
-				BACKENDS[i].timeout = c->health.timeout; /* FIXME: race condition-ish */
+				BACKENDS[i].timeout = c->health.timeout;
 				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting health check timeout to %ds",
 						i, BACKENDS[i].timeout);
 
