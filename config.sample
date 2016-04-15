@@ -17,8 +17,8 @@ pidfile /var/vcap/sys/run/pgrouter/pgrouter.pid
 log INFO
 
 health {
-  timeout 5s
-  check 15s
+  timeout 3s
+  check 7s
   database postgres
   username pgtest
   #password "s\ekrit squirrel"
