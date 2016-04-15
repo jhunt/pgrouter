@@ -3,56 +3,58 @@
 #include <errno.h>
 #include <pthread.h>
 
-static int rdlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[worker] acquiring %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_rdlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[worker] failed to acquire %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
+#define SUBSYS "worker"
+#include "locks.inc.c"
 
-static int wrlock(pthread_rwlock_t *l, const char *what, int idx)
-{
-	pgr_logf(stderr, LOG_DEBUG, "[worker] acquiring %s/%d write lock %p", what, idx, l);
-	int rc = pthread_rwlock_wrlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[worker] failed to acquire %s/%d write lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
-}
+#define max(a,b) ((a) > (b) ? (a) : (b))
 
-static int unlock(pthread_rwlock_t *l, const char *what, int idx)
+static void handle_client(CONTEXT *c, int connfd)
 {
-	pgr_logf(stderr, LOG_DEBUG, "[worker] releasing %s/%d read lock %p", what, idx, l);
-	int rc = pthread_rwlock_unlock(l);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "[worker] failed to release the %s/%d read lock: %s (errno %d)",
-				what, idx, strerror(rc), rc);
-		return rc;
-	}
-	return 0;
+	/* FIXME: handle the incoming client connection */
+	sleep(5); /* FIXME: remove this sleep */
 }
 
 static void* do_worker(void *_c)
 {
 	CONTEXT *c = (CONTEXT*)_c;
-	int rc;
+	int rc, connfd, i, nfds;
+	int watch[2] = { c->frontend4, c->frontend6 };
+	fd_set rfds;
 
 	for (;;) {
-		/* FIXME: block on accept() */
-		/* FIXME: acquire wrlock on CONTEXT to update #clients (++) */
-		/* FIXME: handle the incoming client connection */
-		/* FIXME: close the connection fd */
-		/* FIXME: acquire wrlock on CONTEXT to update #clients (--) */
-		sleep(5); /* FIXME: remove this sleep */
+		FD_ZERO(&rfds);
+		nfds = 0;
+
+		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
+			if (watch[i] >= 0) {
+				FD_SET(watch[i], &rfds);
+				nfds = max(watch[i], nfds);
+			}
+		}
+
+		rc = select(nfds+1, &rfds, NULL, NULL, NULL);
+		if (rc == -1) {
+			if (errno == EINTR) {
+				continue;
+			}
+			pgr_logf(stderr, LOG_ERR, "[worker] select received system error: %s (errno %d)",
+					strerror(errno), errno);
+			pgr_abort(ABORT_SYSCALL);
+		}
+
+		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
+			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
+				connfd = accept(watch[i], NULL, NULL);
+				/* FIXME: acquire wrlock on CONTEXT to update #clients (++) */
+				handle_client(c, connfd);
+				/* FIXME: acquire wrlock on CONTEXT to update #clients (--) */
+				close(connfd);
+			}
+		}
 	}
 
+	close(c->frontend4);
+	close(c->frontend6);
 	return NULL;
 }
 
