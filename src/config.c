@@ -23,6 +23,15 @@ char* pgr_backend_status(int status)
 	}
 }
 
+char* pgr_backend_role(int role)
+{
+	switch (role) {
+	case BACKEND_ROLE_MASTER: return "master";
+	case BACKEND_ROLE_SLAVE:  return "slave";
+	default:                  return "unknown";
+	}
+}
+
 typedef struct {
 	int value;
 	int set;

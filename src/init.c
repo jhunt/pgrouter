@@ -16,6 +16,8 @@ int pgr_context(CONTEXT *c)
 		if (rc != 0) {
 			return rc;
 		}
+
+		c->backends[i].status = BACKEND_IS_STARTING;
 	}
 
 	if (!c->startup.frontend) {

@@ -13,7 +13,7 @@ typedef struct {
 	int timeout;        /* health check connection timeout, in seconds */
 
 	int ok;             /* is the backend is accepting connections?    */
-	int master;         /* is the backend the write master?            */
+	int role;           /* is the backend the write master or a slave? */
 	lag_t pos;          /* xlog position for this backend (absolute)   */
 
 	char endpoint[256]; /* "<host>:<port>" string, for diagnostics     */
@@ -159,6 +159,8 @@ static void* do_watcher(void *_c)
 				BACKENDS[i].serial = c->backends[i].serial;
 				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting serial to %d",
 						i, BACKENDS[i].serial);
+
+				BACKENDS[i].role = c->backends[i].role;
 			}
 
 			rc = unlock(&c->backends[i].lock, "backend", i);
@@ -174,11 +176,9 @@ static void* do_watcher(void *_c)
 
 		/* now, loop over the backends and gather our health data */
 		int master_pos;
-		int ok = BACKEND_IS_FAILED;
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			BACKENDS[i].ok     = 0;
-			BACKENDS[i].master = 0;
-			BACKENDS[i].pos    = 0;
+			BACKENDS[i].ok   = BACKEND_IS_FAILED;
+			BACKENDS[i].pos  = 0;
 
 			pgr_logf(stderr, LOG_INFO, "[watcher] checking backend/%d %s (connecting as %s)",
 					i, BACKENDS[i].endpoint, BACKENDS[i].userdb);
@@ -239,10 +239,10 @@ static void* do_watcher(void *_c)
 				char *val = PQgetvalue(result, 0, 0);
 				pgr_logf(stderr, LOG_INFO, "backend %s returned '%s' for `%s`",
 						BACKENDS[i].endpoint, val, sql);
-				BACKENDS[i].master = *val == 't' ? 0 : 1;
+				BACKENDS[i].role = *val == 't' ? BACKEND_ROLE_SLAVE : BACKEND_ROLE_MASTER;
 				PQclear(result);
 
-				if (BACKENDS[i].master) {
+				if (BACKENDS[i].role == BACKEND_ROLE_MASTER) {
 					sql = "SELECT pg_current_xlog_location()";
 				} else {
 					sql = "SELECT pg_last_xlog_receive_location()";
@@ -290,11 +290,10 @@ static void* do_watcher(void *_c)
 				PQclear(result);
 
 				/* keep track of our master position for lag calculations */
-				if (BACKENDS[i].master) {
+				if (BACKENDS[i].role == BACKEND_ROLE_MASTER) {
 					master_pos = BACKENDS[i].pos;
 				}
 
-				ok++;
 				BACKENDS[i].ok = BACKEND_IS_OK;
 				break;
 
@@ -325,7 +324,7 @@ static void* do_watcher(void *_c)
 			continue;
 		}
 
-		c->ok_backends = ok;
+		c->ok_backends = 0;
 		for (i = 0; i < NUM_BACKENDS; i++) {
 			rc = wrlock(&c->backends[i].lock, "backend", i);
 			if (rc != 0) {
@@ -351,12 +350,16 @@ static void* do_watcher(void *_c)
 				continue;
 			}
 
-			c->backends[i].status = (BACKENDS[i].ok ? BACKEND_IS_OK : BACKEND_IS_FAILED);
-			c->backends[i].master = BACKENDS[i].master;
+			if (BACKENDS[i].ok == BACKEND_IS_OK) {
+				c->ok_backends++;
+			}
+			c->backends[i].status = BACKENDS[i].ok;
+			c->backends[i].role = BACKENDS[i].role;
 			c->backends[i].health.lag = master_pos - BACKENDS[i].pos;
-			pgr_logf(stderr, LOG_INFO, "[watcher] updated backend/%d with status %d (%s) and lag %d (%d/%d)",
-					i, c->backends[i].status, (pgr_backend_status(BACKENDS[i].ok),
-					c->backends[i].health.lag, BACKENDS[i].pos, master_pos));
+			pgr_logf(stderr, LOG_INFO, "[watcher] updated %s (%d) backend/%d with status %d (%s) and lag %d (%d/%d)",
+					pgr_backend_role(c->backends[i].role), c->backends[i].role,
+					i, c->backends[i].status, pgr_backend_status(c->backends[i].status),
+					c->backends[i].health.lag, BACKENDS[i].pos, master_pos);
 
 			rc = unlock(&c->backends[i].lock, "backend", i);
 			if (rc != 0) {

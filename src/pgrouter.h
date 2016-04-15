@@ -14,6 +14,13 @@
 
 char* pgr_backend_status(int status);
 
+/* Role the backend plays */
+#define BACKEND_ROLE_UNKNOWN 0
+#define BACKEND_ROLE_MASTER  1
+#define BACKEND_ROLE_SLAVE   2
+
+char* pgr_backend_role(int role);
+
 /* SSL/TLS behaviors */
 #define BACKEND_TLS_OFF      0  /* don't do SSL/TLS             */
 #define BACKEND_TLS_VERIFY   1  /* do SSL/TLS; verify certs.    */
@@ -45,7 +52,7 @@ typedef struct {
 
 	int tls;                    /* a BACKEND_TLS_* constant     */
 
-	int master;                 /* 1 = master, 0 = slave        */
+	int role;                   /* a BACKEND_ROLE_* constant    */
 	int status;                 /* a BACKEND_IS_* constant      */
 	int weight;                 /* weight, range [0, RAND_MAX]  */
 

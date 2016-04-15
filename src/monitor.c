@@ -62,17 +62,22 @@ static void handle_client(CONTEXT *c, int connfd)
 			return;
 		}
 
-		if (c->backends[i].status == BACKEND_IS_OK) {
-			writef(connfd, "%s:%d %s OK %llu/%llu\n",
+		switch (c->backends[i].status) {
+		case BACKEND_IS_OK:
+			writef(connfd, "%s:%d %s %s %llu/%llu\n",
 					c->backends[i].hostname, c->backends[i].port,
-					(c->backends[i].master ? "master" : "slave"),
+					pgr_backend_role(c->backends[i].role),
+					pgr_backend_status(c->backends[i].status),
 					c->backends[i].health.lag,
 					c->backends[i].health.threshold);
-		} else {
+			break;
+
+		default:
 			writef(connfd, "%s:%d %s %s\n",
 					c->backends[i].hostname, c->backends[i].port,
-					(c->backends[i].master ? "master" : "slave"),
+					pgr_backend_role(c->backends[i].role),
 					pgr_backend_status(c->backends[i].status));
+			break;
 		}
 
 		rc = unlock(&c->backends[i].lock, "backend", i);
