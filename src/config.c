@@ -45,8 +45,6 @@ typedef struct {
 
 struct _backend {
 	char *id;
-	char *hostname;
-	int port;
 
 	intval_t tls;
 	intval_t weight;
@@ -680,7 +678,6 @@ static struct _backend* make_backend(const char *id)
 	}
 	if (id) {
 		b->id = strdup(id);
-		/* FIXME: parse id */
 	} else {
 		set_int(&b->tls,    BACKEND_TLS_OFF);
 		set_int(&b->weight, 1);
