@@ -11,7 +11,17 @@
 static void handle_client(CONTEXT *c, int connfd)
 {
 	/* FIXME: handle the incoming client connection */
-	sleep(5); /* FIXME: remove this sleep */
+	/* FIXME: pick a slave (randomly) that is not too far behind */
+	/* FIXME: wait for startup message from client; relay to chosen slave */
+	/* FIXME: if slave replies with an auth response */
+		/* FIXME: check that it is md5 - if not, forge error to client and close */
+		/* FIXME: relay md5 packet to slave; relay response to client */
+		/* FIXME: save md6 packet for later (if we need to auth to a master) */
+	/* FIXME: process any startup messages from slave, until ReadyForQuery */
+	/* FIXME: enter main protocol loop */
+		/* FIXME: listen for a query from the client: */
+			/* FIXME: if it is an updating query, connect to a master (+auth) */
+			/* FIXME: otherwise, use last connected (master / slave) */
 }
 
 static void* do_worker(void *_c)
