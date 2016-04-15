@@ -6,6 +6,9 @@
 #include <signal.h>
 #include <errno.h>
 
+#define SUBSYS "super"
+#include "locks.inc.c"
+
 #define DEFAULT_CONFIG_FILE "/etc/pgrouter.conf"
 
 int main(int argc, char **argv)
@@ -176,7 +179,19 @@ int main(int argc, char **argv)
 
 		case SIGHUP:
 			pgr_logf(stderr, LOG_INFO, "[super] caught SIGHUP (%d)", sig);
-			/* FIXME: reload! */
+
+			rc = wrlock(&c.lock, "context", 0);
+			if (rc != 0) {
+				pgr_logf(stderr, LOG_ERR, "[super] RELOAD FAILED");
+				break;
+			}
+			rc = pgr_configure(&c, config, 1);
+			if (rc != 0) {
+				pgr_logf(stderr, LOG_ERR, "[super] RELOAD FAILED");
+				unlock(&c.lock, "context", 0);
+				break;
+			}
+			unlock(&c.lock, "context", 0);
 			break;
 		}
 	}
