@@ -8,26 +8,25 @@
 
 static int getport(const char *ep)
 {
+	errno = EINVAL;
+
 	const char *p;
 	for (p = ep; *p && *p != ':'; p++)
 		;
 
 	if (*p != ':') {
-		/* FIXME: need an errno here */
 		return -1;
 	}
 
 	int port = 0;
 	for (p++; *p; p++) {
 		if (!isdigit(*p)) {
-			/* FIXME: need an errno here */
 			return -1;
 		}
 		port = port * 10 + (*p - '0');
 	}
 
 	if (port > 0xffff) {
-		/* FIXME: need an errno here */
 		return -1;
 	}
 
