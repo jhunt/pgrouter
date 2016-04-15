@@ -117,7 +117,7 @@ static void* do_monitor(void *_c)
 			if (errno == EINTR) {
 				continue;
 			}
-			pgr_logf(stderr, LOG_ERR, "select recived system error: %s (errno %d)",
+			pgr_logf(stderr, LOG_ERR, "[monitor] select received system error: %s (errno %d)",
 					strerror(errno), errno);
 			pgr_abort(ABORT_SYSCALL);
 		}
