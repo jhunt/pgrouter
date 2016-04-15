@@ -480,7 +480,6 @@ static TOKEN lex_numeric(LEXER *l)
 		switch (c) {
 		case 'h': case 'H': factor *= 60;
 		case 'm': case 'M': factor *= 60;
-		case 's': case 'S': factor *= 60;
 		}
 		t = token(T_TYPE_TIME, l);
 		t.semval.i = ival * factor;
