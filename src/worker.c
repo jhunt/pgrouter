@@ -1,4 +1,5 @@
 #include "pgrouter.h"
+#include "proto.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <pthread.h>
@@ -10,10 +11,50 @@
 
 static void handle_client(CONTEXT *c, int connfd)
 {
-	/* FIXME: handle the incoming client connection */
-	/* FIXME: pick a slave (randomly) that is not too far behind */
+	int rc, backend;
+	PG3_MSG msg;
+	PG3_ERROR err;
+
+	backend = pgr_pick_any(c);
+
 	/* FIXME: wait for startup message from client; relay to chosen slave */
-	/* FIXME: if slave replies with an auth response */
+	rc = pg3_recv(connfd, &msg, PG3_MSG_STARTUP);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to receive startup message from client; disconnecting");
+		return;
+	}
+
+	if (backend < 0) {
+		pgr_logf(stderr, LOG_ERR, "unable to find a suitable backend for initial stage of conversation");
+		err.severity = "ERROR";
+		err.sqlstate = "08000"; /* connection exception */
+		err.message  = "No viable backends found";
+		err.details  = "pgrouter was unable to find a healthy PostgreSQL backend";
+		err.hint     = "Check the health of your PostgreSQL backend clusters, and make sure that they are up, accepting connections, and within the replication lag threshold from the master";
+
+		pg3_free(&msg);
+		rc = pg3_error(&msg, &err);
+		if (rc != 0) {
+			pgr_logf(stderr, LOG_ERR, "failed to allocate a ErrorResponse '%s': %s (errno %d)",
+					err.message, strerror(errno), errno);
+			return;
+		}
+
+		rc = pg3_send(connfd, &msg);
+		if (rc != 0) {
+			pgr_logf(stderr, LOG_ERR, "failed to send ErrorResponse '%s': %s (errno %d)",
+					err.message, strerror(errno), errno);
+			return;
+		}
+
+		pgr_logf(stderr, LOG_INFO, "ErrorResponse '%s' sent; disconnecting", err.message);
+		pg3_free(&msg);
+		return;
+	}
+
+	/* FIXME: connect to the backend */;
+	/* FIXME: relay the Startup message to our backend */
+	/* FIXME: if backend replies with an auth response */
 		/* FIXME: check that it is md5 - if not, forge error to client and close */
 		/* FIXME: relay md5 packet to slave; relay response to client */
 		/* FIXME: save md6 packet for later (if we need to auth to a master) */

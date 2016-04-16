@@ -6,6 +6,8 @@
 #include <pthread.h>
 #include <syslog.h>
 
+#define RAND_DEVICE "/dev/urandom"
+
 /* Status of backends */
 #define BACKEND_IS_OK        0  /* backend is up and running    */
 #define BACKEND_IS_STARTING  1  /* backend is still connecting  */
@@ -27,11 +29,12 @@ char* pgr_backend_role(int role);
 #define BACKEND_TLS_NOVERIFY 2  /* do SSL/TLS; skip verif.      */
 
 /* Exit codes */
-#define ABORT_UNKNOWN 1
-#define ABORT_MEMFAIL 2
-#define ABORT_LOCK    3
-#define ABORT_NET     4
-#define ABORT_SYSCALL 5
+#define ABORT_UNKNOWN  1
+#define ABORT_MEMFAIL  2
+#define ABORT_LOCK     3
+#define ABORT_NET      4
+#define ABORT_SYSCALL  5
+#define ABORT_RANDFAIL 6
 
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
@@ -110,6 +113,10 @@ typedef struct {
 /* process control subroutines */
 void pgr_abort(int code);
 
+/* randomness subroutines */
+int pgr_rand(int start, int end);
+void pgr_srand(int seed);
+
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
 int pgr_context(CONTEXT *c);
@@ -123,13 +130,13 @@ void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 int pgr_listen4(const char *ep, int backlog);
 int pgr_listen6(const char *ep, int backlog);
 
-/* watcher subroutines */
+/* backend subroutines */
+int pgr_pick_any(CONTEXT *c);
+int pgr_pick_master(CONTEXT *c);
+
+/* thread subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);
-
-/* monitor subroutines */
 int pgr_monitor(CONTEXT *c, pthread_t* tid);
-
-/* worker subroutines */
 int pgr_worker(CONTEXT *c, pthread_t *tid);
 
 #endif
