@@ -1,0 +1,21 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+my $cmd = shift @ARGV;
+if (!$cmd) {
+	print STDERR "USAGE: $0 <command> [arguments]\n";
+	exit 1;
+}
+
+if ($cmd eq "startup") {
+	if (@ARGV < 2) {
+		print STDERR "USAGE: $0 startup <major> <minor> [parameter=value]\n";
+		exit 1;
+	}
+	my ($maj, $min, @params) = @ARGV;
+	my $s = pack('nn', $maj, $min);
+	$s .= pack('A*xA*', split /=/, $_, 2) for @params;
+	print pack('N', 1 + 4 + length($s)) . "$s\0";
+}
