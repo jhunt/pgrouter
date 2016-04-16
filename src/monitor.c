@@ -25,14 +25,14 @@ static int writef(int fd, const char *fmt, ...)
 
 	if (n > 0 && buf[n - 1] == '\n') {
 		buf[n-1] = '.';
-		pgr_logf(stderr, LOG_DEBUG, "[monitor] writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
+		pgr_debugf("writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
 		buf[n-1] = '\n';
 	} else {
-		pgr_logf(stderr, LOG_DEBUG, "[monitor] writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
+		pgr_debugf("writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
 	}
 	wr = 0;
 	while ((wr = write(fd, buf + wr, n)) > 0) {
-		pgr_logf(stderr, LOG_DEBUG, "[monitor]   wrote %d/%d bytes to fd %d (%d remain)",
+		pgr_debugf("  wrote %d/%d bytes to fd %d (%d remain)",
 			wr, n, fd, n - wr);
 		n -= wr;
 	}

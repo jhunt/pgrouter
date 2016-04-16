@@ -82,7 +82,7 @@ static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int back
 		return -1;
 	}
 
-	pgr_logf(stderr, LOG_DEBUG, "attempting to listen with a backlog of %d", backlog);
+	pgr_debugf("attempting to listen with a backlog of %d", backlog);
 	rc = listen(fd, backlog);
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to listen on [%s]: %s (errno %d)",
@@ -119,9 +119,9 @@ int pgr_listen4(const char *ep, int backlog)
 		rc = inet_pton(AF_INET, host, &sa.sin_addr);
 		if (rc != 1) {
 			if (rc < 0 && errno == EAFNOSUPPORT) {
-				pgr_logf(stderr, LOG_DEBUG, "pgr_listen4: ipv4 address family not supported");
+				pgr_debugf("ipv4 address family not supported");
 			} else {
-				pgr_logf(stderr, LOG_DEBUG, "pgr_listen4: '%s' is not an ipv4 address", host);
+				pgr_debugf("'%s' is not an ipv4 address", host);
 			}
 			free(host);
 			return -1;
@@ -137,7 +137,7 @@ int pgr_listen4(const char *ep, int backlog)
 		return -1;
 	}
 
-	pgr_logf(stderr, LOG_DEBUG, "binding / listening on fd %d", fd);
+	pgr_debugf("binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }
 
@@ -165,9 +165,9 @@ int pgr_listen6(const char *ep, int backlog)
 		rc = inet_pton(AF_INET6, host, &sa.sin6_addr);
 		if (rc != 1) {
 			if (rc < 0 && errno == EAFNOSUPPORT) {
-				pgr_logf(stderr, LOG_DEBUG, "pgr_listen6: ipv6 address family not supported");
+				pgr_debugf("ipv6 address family not supported");
 			} else {
-				pgr_logf(stderr, LOG_DEBUG, "pgr_listen6: '%s' is not an ipv6 address", host);
+				pgr_debugf("'%s' is not an ipv6 address", host);
 			}
 			free(host);
 			return -1;
@@ -183,6 +183,6 @@ int pgr_listen6(const char *ep, int backlog)
 		return -1;
 	}
 
-	pgr_logf(stderr, LOG_DEBUG, "binding / listening on fd %d", fd);
+	pgr_debugf("binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }

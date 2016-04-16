@@ -20,7 +20,8 @@ static void handle_client(CONTEXT *c, int connfd)
 	/* FIXME: wait for startup message from client; relay to chosen slave */
 	rc = pg3_recv(connfd, &msg, PG3_MSG_STARTUP);
 	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "failed to receive startup message from client; disconnecting");
+		pgr_logf(stderr, LOG_ERR, "failed to receive startup message from client: %s (errno %d, rc %d)",
+				strerror(errno), errno, rc);
 		return;
 	}
 

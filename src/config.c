@@ -188,7 +188,7 @@ static void dump_token(TOKEN *t)
 	}
 done:
 	buf[i] = '\0';
-	pgr_logf(stderr, LOG_DEBUG, "got a token {%s(%d), '%s', %d}",
+	pgr_debugf("got a token {%s(%d), '%s', %d}",
 			token_name(t->type), t->type, buf, t->length);
 }
 
@@ -198,7 +198,7 @@ static void dump_lexer(LEXER *l)
 	int n = bound(l->pos - l->start, 0, 255);
 	strncpy(buf, l->src + l->start, n);
 	buf[n] = '\0';
-	pgr_logf(stderr, LOG_DEBUG, "lexer at %s:%d:%d, %d/%d s=%d '%s'",
+	pgr_debugf("lexer at %s:%d:%d, %d/%d s=%d '%s'",
 	                l->file, l->line, l->col,
 	                l->pos, l->max, l->start,
 	                buf);
@@ -527,7 +527,7 @@ static TOKEN lex_wildcard(LEXER *l)
 
 LEXER* lexer_init(const char *file, FILE *io)
 {
-	pgr_logf(stderr, LOG_DEBUG, "intializing a new lexer for %s (io %p)", file, io);
+	pgr_debugf("intializing a new lexer for %s (io %p)", file, io);
 
 	/* how much stuff is in *io ? */
 	int off = fseek(io, 0, SEEK_END);
@@ -541,7 +541,7 @@ LEXER* lexer_init(const char *file, FILE *io)
 	if (fseek(io, off, SEEK_SET) < 0) {
 		return NULL;
 	}
-	pgr_logf(stderr, LOG_DEBUG, "looks like there are %lu bytes of data to parse", size);
+	pgr_debugf("looks like there are %lu bytes of data to parse", size);
 
 	/* is it too much stuff? */
 	if (size > INT_MAX) {
@@ -575,12 +575,12 @@ LEXER* lexer_init(const char *file, FILE *io)
 	while ((n = fread(l->src + pos, sizeof(char), left, io)) > 0) {
 		left -= n;
 		pos  += n;
-		pgr_logf(stderr, LOG_DEBUG, "read %u bytes, current position %d/%d, %d bytes left",
+		pgr_debugf("read %u bytes, current position %d/%d, %d bytes left",
 				n, pos, size, left);
 	}
-	pgr_logf(stderr, LOG_DEBUG, "final position %d/%d, %d bytes left",
+	pgr_debugf("final position %d/%d, %d bytes left",
 			pos, size, left);
-	pgr_logf(stderr, LOG_DEBUG, "src:\n```\n%s```", l->src);
+	pgr_debugf("src:\n```\n%s```", l->src);
 	pgr_logf(stderr, LOG_INFO, "set up to lex %s, "
 			"starting at %d:%d (position %d/%d, token at %d)",
 			l->file, l->line, l->col, l->pos, l->max, l->start);

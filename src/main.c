@@ -151,7 +151,7 @@ int main(int argc, char **argv)
 		sigaddset(&signals, SIGQUIT);
 		sigaddset(&signals, SIGHUP);
 
-		pgr_logf(stderr, LOG_DEBUG, "[super] waiting for a signal...");
+		pgr_debugf("waiting for a signal...");
 		rc = sigwait(&signals, &sig);
 		if (rc < 0) {
 			pgr_logf(stderr, LOG_ERR, "[super] errored while waiting for signals: %s (errno %d)",

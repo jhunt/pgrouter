@@ -29,7 +29,7 @@ static int xlog(const char *s, lag_t *lag)
 	const char *p;
 	lag_t hi = 0, lo = 0;
 
-	pgr_logf(stderr, LOG_DEBUG, "[watcher] parsing xlog value '%s'", s);
+	pgr_debugf("parsing xlog value '%s'", s);
 	for (p = s; *p && *p != '/'; p++) {
 		if (*p >= '0' || *p <= '9') {
 			hi = hi * 0xf + (*p - '0');
@@ -80,7 +80,7 @@ static void* do_watcher(void *_c)
 		/* if we added or removed backends as part of a configuration
 		   reload, we need to reallocate the cached health information. */
 		if (c->num_backends != NUM_BACKENDS) {
-			pgr_logf(stderr, LOG_DEBUG, "[watcher] number of backends changed (old %d != new %d); "
+			pgr_debugf("number of backends changed (old %d != new %d); "
 					"reallocating internal structures that keep track of backend health...",
 					NUM_BACKENDS, c->num_backends);
 
@@ -106,18 +106,18 @@ static void* do_watcher(void *_c)
 			}
 
 			if (c->backends[i].serial != BACKENDS[i].serial) {
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d cached serial %d != actual serial %d; updating cache entry",
+				pgr_debugf("backend/%d cached serial %d != actual serial %d; updating cache entry",
 						i, BACKENDS[i].serial, c->backends[i].serial);
 				pgr_logf(stderr, LOG_INFO, "[watcher] updating backend/%d with (potential) new connection information", i);
 
 				BACKENDS[i].timeout = c->health.timeout;
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting health check timeout to %ds",
+				pgr_debugf("backend/%d: setting health check timeout to %ds",
 						i, BACKENDS[i].timeout);
 
 				/* endpoint = "host:port" */
 				n = snprintf(BACKENDS[i].endpoint, sizeof(BACKENDS[i].endpoint),
 						"%s:%d", c->backends[i].hostname, c->backends[i].port);
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting endpoint to '%s'",
+				pgr_debugf("backend/%d: setting endpoint to '%s'",
 						i, BACKENDS[i].endpoint);
 				if (n >= sizeof(BACKENDS[i].endpoint)) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] re-cache of backend/%d endpoint string failed; "
@@ -129,7 +129,7 @@ static void* do_watcher(void *_c)
 				/* userdb = "user@database" */
 				n = snprintf(BACKENDS[i].userdb, sizeof(BACKENDS[i].userdb),
 						"%s@%s", c->backends[i].health.username, c->backends[i].health.database);
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting user@db to '%s'",
+				pgr_debugf("backend/%d: setting user@db to '%s'",
 						i, BACKENDS[i].userdb);
 				if (n >= sizeof(BACKENDS[i].userdb)) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] re-cache of backend/%d user@db string failed; "
@@ -144,7 +144,7 @@ static void* do_watcher(void *_c)
 						c->backends[i].hostname, c->backends[i].port,
 						c->backends[i].health.username, c->backends[i].health.password,
 						c->backends[i].health.database, BACKENDS[i].timeout);
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting dsn to '%s'",
+				pgr_debugf("backend/%d: setting dsn to '%s'",
 						i, BACKENDS[i].dsn);
 				if (n >= sizeof(BACKENDS[i].dsn)) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] re-cache of backend/%d dsn string failed; "
@@ -157,7 +157,7 @@ static void* do_watcher(void *_c)
 				}
 
 				BACKENDS[i].serial = c->backends[i].serial;
-				pgr_logf(stderr, LOG_DEBUG, "[watcher] backend/%d: setting serial to %d",
+				pgr_debugf("backend/%d: setting serial to %d",
 						i, BACKENDS[i].serial);
 
 				BACKENDS[i].role = c->backends[i].role;
@@ -182,7 +182,7 @@ static void* do_watcher(void *_c)
 
 			pgr_logf(stderr, LOG_INFO, "[watcher] checking backend/%d %s (connecting as %s)",
 					i, BACKENDS[i].endpoint, BACKENDS[i].userdb);
-			pgr_logf(stderr, LOG_DEBUG, "[watcher] connecting with dsn '%s'", BACKENDS[i].dsn);
+			pgr_debugf("connecting with dsn '%s'", BACKENDS[i].dsn);
 
 			PGconn *conn = PQconnectdb(BACKENDS[i].dsn);
 			if (!conn) {
@@ -378,7 +378,7 @@ static void* do_watcher(void *_c)
 			pgr_abort(ABORT_LOCK);
 		}
 
-		pgr_logf(stderr, LOG_DEBUG, "[watcher] sleeping for %d seconds", sleep_for);
+		pgr_debugf("sleeping for %d seconds", sleep_for);
 		sleep(sleep_for);
 	}
 
