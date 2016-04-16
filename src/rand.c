@@ -34,7 +34,7 @@ static int* prng_seed()
 			pgr_abort(ABORT_RANDFAIL);
 		}
 
-		if (read(fd, SEED, sizeof(int)) != 1) {
+		if (read(fd, SEED, sizeof(int)) != sizeof(int)) {
 			pgr_logf(stderr, LOG_ERR, "[rand] unable to initialize PRNG from %s: %s (errno %d)",
 					RAND_DEVICE, strerror(errno), errno);
 			pgr_abort(ABORT_RANDFAIL);
