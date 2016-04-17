@@ -90,9 +90,15 @@ int pg3_error(PG3_MSG *msg, PG3_ERROR *err)
 	msg->length = (1 /* type field */ + strlen(err->severity) + 1 /* null-terminator */)
 	            + (1 /* type field */ + strlen(err->sqlstate) + 1 /* null-terminator */)
 	            + (1 /* type field */ + strlen(err->message)  + 1 /* null-terminator */)
-	            + (1 /* type field */ + strlen(err->details)  + 1 /* null-terminator */)
-	            + (1 /* type field */ + strlen(err->hint)     + 1 /* null-terminator */)
 	            + 4 /* length field */;
+
+	if (err->details != NULL) {
+		msg->length += (1 /* type field */ + strlen(err->details)  + 1 /* null-terminator */);
+	}
+	if (err->hint != NULL) {
+		msg->length += (1 /* type field */ + strlen(err->hint)     + 1 /* null-terminator */);
+	}
+
 	msg->data = malloc(msg->length);
 	if (!msg->data) {
 		return -1;
@@ -104,7 +110,11 @@ int pg3_error(PG3_MSG *msg, PG3_ERROR *err)
 	*p++ = 'S'; for (s = err->severity; *s; *p++ = *s++) ; *p++ = '\0';
 	*p++ = 'C'; for (s = err->sqlstate; *s; *p++ = *s++) ; *p++ = '\0';
 	*p++ = 'M'; for (s = err->message;  *s; *p++ = *s++) ; *p++ = '\0';
-	*p++ = 'D'; for (s = err->details;  *s; *p++ = *s++) ; *p++ = '\0';
-	*p++ = 'H'; for (s = err->hint;     *s; *p++ = *s++) ; *p++ = '\0';
+	if (err->details != NULL) {
+		*p++ = 'D'; for (s = err->details; *s; *p++ = *s++) ; *p++ = '\0';
+	}
+	if (err->hint != NULL) {
+		*p++ = 'H'; for (s = err->hint; *s; *p++ = *s++) ; *p++ = '\0';
+	}
 	return 0;
 }
