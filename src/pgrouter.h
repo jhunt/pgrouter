@@ -106,6 +106,9 @@ typedef struct {
 		int daemonize;          /* to daemonize or not          */
 	} startup;
 
+	int fe_conns;               /* how many connected clients?  */
+	int be_conns;               /* how many backend conn.?      */
+
 	int ok_backends;            /* how many healthy backends?   */
 	int num_backends;           /* how many *total* backends?   */
 	BACKEND *backends;          /* the backends -- epic         */

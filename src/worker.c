@@ -414,9 +414,25 @@ static void* do_worker(void *_c)
 		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
 			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
 				connfd = accept(watch[i], NULL, NULL);
-				/* FIXME: acquire wrlock on CONTEXT to update #clients (++) */
-				handle_client(c, connfd);
-				/* FIXME: acquire wrlock on CONTEXT to update #clients (--) */
+				rc = wrlock(&c->lock, "context", 0);
+				if (rc != 0) {
+					pgr_logf(stderr, LOG_ERR, "[worker] unable to lock context; client connections stats *will* be incorrect");
+					handle_client(c, connfd);
+
+				} else {
+					c->fe_conns++;
+					unlock(&c->lock, "context", 0);
+					handle_client(c, connfd);
+
+					rc = wrlock(&c->lock, "context", 0);
+					if (rc != 0) {
+						pgr_logf(stderr, LOG_ERR, "[worker] unable to lock context; client connections stats *will* be incorrect");
+					} else {
+						c->fe_conns--;
+						unlock(&c->lock, "context", 0);
+					}
+
+				}
 				close(connfd);
 			}
 		}
