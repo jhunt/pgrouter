@@ -25,6 +25,27 @@
 #define  FSM_WAIT_SYNC      12
 #define  FSM_SYNC_SENT      13
 
+static char* fsm_name(int n)
+{
+	switch (n) {
+	case FSM_START:         return "START";
+	case FSM_SHUTDOWN:      return "SHUTDOWN";
+	case FSM_STARTED:       return "STARTED";
+	case FSM_AUTH_REQUIRED: return "AUTH_REQUIRED";
+	case FSM_AUTH_SENT:     return "AUTH_SENT";
+	case FSM_READY:         return "READY";
+	case FSM_QUERY_SENT:    return "QUERY_SENT";
+	case FSM_PARSE_SENT:    return "PARSE_SENT";
+	case FSM_BIND_READY:    return "BIND_READY";
+	case FSM_BIND_SENT:     return "BIND_SENT";
+	case FSM_EXEC_READY:    return "EXEC_READY";
+	case FSM_EXEC_SENT:     return "EXEC_SENT";
+	case FSM_WAIT_SYNC:     return "WAIT_SYNC";
+	case FSM_SYNC_SENT:     return "SYNC_SENT";
+	default:                return "(unknow)";
+	}
+}
+
 #define  ERR_BADPROTO  1
 #define  ERR_CONNFAIL  2
 #define  ERR_BEFAIL    3
@@ -60,6 +81,7 @@ static int connect_to_any_backend(CONTEXT *c, int *i, int *fd)
 		free(host);
 		return 0;
 	}
+	free(host);
 	*fd = rc;
 	return 1;
 }
@@ -169,7 +191,13 @@ static void handle_client(CONTEXT *c, int fefd)
 	char *host;
 	PG3_MSG msg;
 
+	befd = backend = -1;
+	pgr_debugf("not connected to a backend; fefd = %d, befd = %d",
+			backend, fefd, befd);
+
 	for (;;) {
+		pgr_debugf("FSM[%s] backend = %d, fefd = %d, befd = %d",
+				fsm_name(FSM_START), backend, fefd, befd);
 		switch (state) {
 		case FSM_START:
 			if (!wait_for_message_from(fefd, &msg, PG3_MSG_STARTUP)) {
@@ -182,12 +210,20 @@ static void handle_client(CONTEXT *c, int fefd)
 				state = FSM_SHUTDOWN;
 				break;
 			}
+			pgr_debugf("connected to backend/%d; fefd = %d, befd = %d",
+					backend, fefd, befd);
 
+			if (!relay_msg_to(befd, &msg)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
 			state = FSM_STARTED;
 			break;
 
 		case FSM_SHUTDOWN:
-			close(befd);
+			if (befd >= 0) {
+				close(befd);
+			}
 			close(fefd);
 			return;
 
