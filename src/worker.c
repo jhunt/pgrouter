@@ -1,6 +1,7 @@
 #include "pgrouter.h"
 #include "proto.h"
 #include <stdlib.h>
+#include <string.h>
 #include <errno.h>
 #include <pthread.h>
 
@@ -9,61 +10,377 @@
 
 #define max(a,b) ((a) > (b) ? (a) : (b))
 
-static void handle_client(CONTEXT *c, int connfd)
+#define  FSM_START          0
+#define  FSM_SHUTDOWN       1
+#define  FSM_STARTED        2
+#define  FSM_AUTH_REQUIRED  3
+#define  FSM_AUTH_SENT      4
+#define  FSM_READY          5
+#define  FSM_QUERY_SENT     6
+#define  FSM_PARSE_SENT     7
+#define  FSM_BIND_READY     8
+#define  FSM_BIND_SENT      9
+#define  FSM_EXEC_READY     10
+#define  FSM_EXEC_SENT      11
+#define  FSM_WAIT_SYNC      12
+#define  FSM_SYNC_SENT      13
+
+static int connect_to_any_backend(CONTEXT *c, int *i, int *fd)
 {
-	int rc, backend;
+	return 1;
+}
+
+static int wait_for_message_from(int fd, PG3_MSG *msg, int type)
+{
+	return 1;
+}
+
+static int send_error_to(int fd, const char *error)
+{
+	return 1;
+}
+
+static int send_msg_to(int fd, PG3_MSG *msg)
+{
+	return 1;
+}
+
+static void handle_client(CONTEXT *c, int fefd)
+{
+	int state = FSM_START;
+	int rc, backend, befd, port;
+	char *host;
 	PG3_MSG msg;
 	PG3_ERROR err;
 
-	backend = pgr_pick_any(c);
+	for (;;) {
+		switch (state) {
+		case FSM_START:
+			if (!wait_for_message_from(fefd, &msg, PG3_MSG_STARTUP)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
 
-	/* FIXME: wait for startup message from client; relay to chosen slave */
-	rc = pg3_recv(connfd, &msg, PG3_MSG_STARTUP);
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "failed to receive startup message from client: %s (errno %d, rc %d)",
-				strerror(errno), errno, rc);
-		return;
-	}
+			if (!connect_to_any_backend(c, &backend, &befd)) {
+				send_error_to(fefd, "Unable to connect to a backend");
+				state = FSM_SHUTDOWN;
+				break;
+			}
 
-	if (backend < 0) {
-		pgr_logf(stderr, LOG_ERR, "unable to find a suitable backend for initial stage of conversation");
-		err.severity = "ERROR";
-		err.sqlstate = "08000"; /* connection exception */
-		err.message  = "No viable backends found";
-		err.details  = "pgrouter was unable to find a healthy PostgreSQL backend";
-		err.hint     = "Check the health of your PostgreSQL backend clusters, and make sure that they are up, accepting connections, and within the replication lag threshold from the master";
+			state = FSM_STARTED;
+			break;
 
-		pg3_free(&msg);
-		rc = pg3_error(&msg, &err);
-		if (rc != 0) {
-			pgr_logf(stderr, LOG_ERR, "failed to allocate a ErrorResponse '%s': %s (errno %d)",
-					err.message, strerror(errno), errno);
-			return;
+		case FSM_STARTED:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_AUTH:
+				send_msg_to(fefd, &msg);
+				state = FSM_AUTH_REQUIRED; /* FIXME: only on Authentication requests */
+				break;
+
+			case PG3_MSG_NOTICE_RESPONSE:
+			case PG3_MSG_BACKEND_KEY_DATA:
+			case PG3_MSG_PARAMETER_STATUS:
+				send_msg_to(fefd, &msg);
+				break;
+
+			case PG3_MSG_READY_FOR_QUERY:
+				send_msg_to(fefd, &msg);
+				state = FSM_READY;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_AUTH_REQUIRED:
+			if (!wait_for_message_from(fefd, &msg, 0)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_PASSWORD_MESSAGE:
+				/* FIXME: save the password message */
+				if (!send_msg_to(befd, &msg)) {
+					send_error_to(fefd, "Backend communication failure");
+					state = FSM_SHUTDOWN;
+					break;
+				}
+				state = FSM_AUTH_SENT;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_AUTH_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_AUTH:
+				send_msg_to(fefd, &msg);
+				state = FSM_STARTED; /* FIXME: only on AuthenticationOk */
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_READY:
+			/* FIXME: wait for message from fefd, or disconnect and exit */
+			/* FIXME: on Query: */
+			/* FIXME:   inspect query contents to determine if it is RO or RW */
+			/* FIXME:   for RO, relay to befd and transition to FSM_QUERY_SENT */
+			/* FIXME:   for RW, */
+			/* FIXME:     if befd is not the write master: */
+			/* FIXME:       disconnect befd from read slave */
+			/* FIXME:       connect befd to write master */
+			/* FIXME:       send normal StartupMessage */
+			/* FIXME:       handle Authentication / Key Data / etc. */
+			/* FIXME:     relay to befd and transition to FSM_QUERY_SENT */
+			/* FIXME: on Parse: */
+			/* FIXME:   inspect query contents to determine if it is RO or RW */
+			/* FIXME:   for RO, relay to befd and transition to FSM_PARSE_SENT */
+			/* FIXME:   for RW, */
+			/* FIXME:     if befd is not the write master: */
+			/* FIXME:       disconnect befd from read slave */
+			/* FIXME:       connect befd to write master */
+			/* FIXME:       send normal StartupMessage */
+			/* FIXME:       handle Authentication / Key Data / etc. */
+			/* FIXME:     relay to befd and transition to FSM_PARSE_SENT */
+			/* FIXME: on *: send ErrorResponse to fefd and exit */
+			break;
+
+		case FSM_QUERY_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_NOTICE_RESPONSE:
+			case PG3_MSG_COMMAND_COMPLETE:
+			case PG3_MSG_ROW_DESCRIPTION:
+			case PG3_MSG_DATA_ROW:
+			case PG3_MSG_EMPTY_QUERY_RESPONSE:
+				send_msg_to(fefd, &msg);
+				break;
+
+			case PG3_MSG_COPY_IN_RESPONSE:
+			case PG3_MSG_COPY_OUT_RESPONSE:
+				/* FIXME: handle copy in / copy out */
+				pgr_abort(ABORT_UNIMPL);
+
+			case PG3_MSG_READY_FOR_QUERY:
+				send_msg_to(fefd, &msg);
+				state = FSM_READY;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_PARSE_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_PARSE_COMPLETE:
+				send_msg_to(fefd, &msg);
+				state = FSM_BIND_READY;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_BIND_READY:
+			if (!wait_for_message_from(fefd, &msg, 0)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_BIND:
+				send_msg_to(befd, &msg);
+				state = FSM_BIND_SENT;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_BIND_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_BIND_COMPLETE:
+				send_msg_to(fefd, &msg);
+				state = FSM_EXEC_READY;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_EXEC_READY:
+			if (!wait_for_message_from(fefd, &msg, 0)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_EXECUTE:
+				send_msg_to(befd, &msg);
+				state = FSM_EXEC_SENT;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_EXEC_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_ERROR_RESPONSE:
+				send_msg_to(fefd, &msg);
+				state = FSM_SHUTDOWN;
+				break;
+
+			case PG3_MSG_COMMAND_COMPLETE:
+				send_msg_to(fefd, &msg);
+				state = FSM_WAIT_SYNC;
+				break;
+
+			case PG3_MSG_COPY_IN_RESPONSE:
+			case PG3_MSG_COPY_OUT_RESPONSE:
+				/* FIXME: handle copy in / copy out */
+				pgr_abort(ABORT_UNIMPL);
+
+			case PG3_MSG_DATA_ROW:
+			case PG3_MSG_EMPTY_QUERY_RESPONSE:
+				send_msg_to(fefd, &msg);
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_WAIT_SYNC:
+			if (!wait_for_message_from(fefd, &msg, 0)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_SYNC:
+				send_msg_to(befd, &msg);
+				state = FSM_SYNC_SENT;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
+
+		case FSM_SYNC_SENT:
+			if (!wait_for_message_from(befd, &msg, 0)) {
+				send_error_to(fefd, "Backend connection timed out");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			switch (msg.type) {
+			case PG3_MSG_READY_FOR_QUERY:
+				send_msg_to(befd, &msg);
+				state = FSM_READY;
+				break;
+
+			default:
+				send_error_to(fefd, "Protocol violation");
+				state = FSM_SHUTDOWN;
+				break;
+			}
+			break;
 		}
-
-		rc = pg3_send(connfd, &msg);
-		if (rc != 0) {
-			pgr_logf(stderr, LOG_ERR, "failed to send ErrorResponse '%s': %s (errno %d)",
-					err.message, strerror(errno), errno);
-			return;
-		}
-
-		pgr_logf(stderr, LOG_INFO, "ErrorResponse '%s' sent; disconnecting", err.message);
-		pg3_free(&msg);
-		return;
 	}
-
-	/* FIXME: connect to the backend */;
-	/* FIXME: relay the Startup message to our backend */
-	/* FIXME: if backend replies with an auth response */
-		/* FIXME: check that it is md5 - if not, forge error to client and close */
-		/* FIXME: relay md5 packet to slave; relay response to client */
-		/* FIXME: save md6 packet for later (if we need to auth to a master) */
-	/* FIXME: process any startup messages from slave, until ReadyForQuery */
-	/* FIXME: enter main protocol loop */
-		/* FIXME: listen for a query from the client: */
-			/* FIXME: if it is an updating query, connect to a master (+auth) */
-			/* FIXME: otherwise, use last connected (master / slave) */
 }
 
 static void* do_worker(void *_c)

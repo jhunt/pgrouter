@@ -39,7 +39,7 @@
 #define  PG3_MSG_AUTH                    'R'   /*  backend   */
 #define  PG3_MSG_PORTAL_SUSPENDED        's'   /*  backend   */
 #define  PG3_MSG_PARAMETER_STATUS        'S'   /*  backend   */
-#define  PG3_MSG_SYN                     'S'   /*  frontend  */
+#define  PG3_MSG_SYNC                    'S'   /*  frontend  */
 #define  PG3_MSG_ROW_DESCRIPTION         'T'   /*  backend   */
 #define  PG3_MSG_FUNCTION_CALL_RESPONSE  'V'   /*  backend   */
 #define  PG3_MSG_COPY_BOTH_RESPONSE      'W'   /*  backend   */
