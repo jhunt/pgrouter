@@ -6,6 +6,11 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+static int negative(int x)
+{
+	return x > 0 ? -1 * x : x;
+}
+
 static int getport(const char *ep)
 {
 	errno = EINVAL;
@@ -236,7 +241,7 @@ int pgr_connect_ep(const char *ep, int timeout_ms)
 	} else {
 		rc = ipv6_endpoint(&ipv6, ep);
 		if (rc != 0) {
-			return 1;
+			return -1;
 		}
 		fd = socket(ipv6.sin6_family, SOCK_STREAM, 0);
 		type = 6;
@@ -252,14 +257,16 @@ int pgr_connect_ep(const char *ep, int timeout_ms)
 	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
 	default:
 		pgr_logf(stderr, LOG_ERR, "unrecognized IP version %d", type);
+		close(fd);
 		return -1;
 	}
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to connect (ipv%d) to %s: %s (errno %d)",
 				type, ep, strerror(errno), errno);
-		return rc;
+		close(fd);
+		return negative(rc);
 	}
-	return 0;
+	return fd;
 }
 
 int pgr_connect(const char *host, int port, int timeout_ms)
@@ -277,7 +284,7 @@ int pgr_connect(const char *host, int port, int timeout_ms)
 	} else {
 		rc = ipv6_hostport(&ipv6, host, port);
 		if (rc != 0) {
-			return 1;
+			return -1;
 		}
 		fd = socket(ipv6.sin6_family, SOCK_STREAM, 0);
 		type = 6;
@@ -293,14 +300,16 @@ int pgr_connect(const char *host, int port, int timeout_ms)
 	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
 	default:
 		pgr_logf(stderr, LOG_ERR, "unrecognized IP version %d", type);
+		close(fd);
 		return -1;
 	}
 	if (rc != 0) {
 		pgr_logf(stderr, LOG_ERR, "failed to connect (ipv%d) to host %s on port %d: %s (errno %d)",
 				type, host, port, strerror(errno), errno);
-		return rc;
+		close(fd);
+		return negative(rc);
 	}
-	return 0;
+	return fd;
 }
 
 int pgr_sendn(int fd, const void *buf, size_t n)
