@@ -86,7 +86,7 @@ static int connect_to_any_backend(CONTEXT *c, int *i, int *fd)
 	return 1;
 }
 
-static int wait_for_message_from(int fd, PG3_MSG *msg, int type)
+static int wait_for_msg_from(int fd, PG3_MSG *msg, int type)
 {
 	int rc;
 
@@ -200,7 +200,7 @@ static void handle_client(CONTEXT *c, int fefd)
 				fsm_name(FSM_START), backend, fefd, befd);
 		switch (state) {
 		case FSM_START:
-			if (!wait_for_message_from(fefd, &msg, PG3_MSG_STARTUP)) {
+			if (!wait_for_msg_from(fefd, &msg, PG3_MSG_STARTUP)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -228,7 +228,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			return;
 
 		case FSM_STARTED:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -264,7 +264,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_AUTH_REQUIRED:
-			if (!wait_for_message_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 0)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -288,7 +288,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_AUTH_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -338,7 +338,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_QUERY_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -376,7 +376,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_PARSE_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -401,7 +401,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_BIND_READY:
-			if (!wait_for_message_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 0)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -420,7 +420,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_BIND_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -445,7 +445,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_EXEC_READY:
-			if (!wait_for_message_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 0)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -464,7 +464,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_EXEC_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -499,7 +499,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_WAIT_SYNC:
-			if (!wait_for_message_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 0)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -518,7 +518,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_SYNC_SENT:
-			if (!wait_for_message_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 0)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
