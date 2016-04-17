@@ -10,6 +10,7 @@ void pgr_abort(int code)
 	case ABORT_NET:      fprintf(stderr, "UNRECOVERABLE NETWORK FAILURE; ABORTING.\n"); break;
 	case ABORT_SYSCALL:  fprintf(stderr, "INTERRUPTED DURING SYSCALL; ABORTING.\n");    break;
 	case ABORT_RANDFAIL: fprintf(stderr, "RANDOMNESS/ENTROPY FAILURE; ABORTING.\n");    break;
+	case ABORT_UNIMPL:   fprintf(stderr, "UNIMPLEMENTED FEAUTRE; ABORTING.\n");         break;
 	default:             fprintf(stderr, "UNKNOWN FAILURE (FILE A BUG); ABORTING.\n");  break;
 	}
 	exit(code);
