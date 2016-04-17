@@ -25,23 +25,140 @@
 #define  FSM_WAIT_SYNC      12
 #define  FSM_SYNC_SENT      13
 
+#define  ERR_BADPROTO  1
+#define  ERR_CONNFAIL  2
+#define  ERR_BEFAIL    3
+
 static int connect_to_any_backend(CONTEXT *c, int *i, int *fd)
 {
+	int rc;
+
+	rc = pgr_pick_any(c);
+	if (rc < 0) {
+		return 0;
+	}
+	*i = rc; /* index into backends */
+
+	rc = rdlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		return 0;
+	}
+	rc = rdlock(&c->backends[*i].lock, "backend", *i);
+	if (rc != 0) {
+		unlock(&c->lock, "context", 0);
+		return 0;
+	}
+
+	char *host = strdup(c->backends[*i].hostname);
+	int port = c->backends[*i].port;
+
+	unlock(&c->backends[*i].lock, "backend", *i);
+	unlock(&c->lock, "context", 0);
+
+	rc = pgr_connect(host, port, 30); /* FIXME: timeout not honored; pick a better one! */
+	if (rc < 0) {
+		free(host);
+		return 0;
+	}
+	*fd = rc;
 	return 1;
 }
 
 static int wait_for_message_from(int fd, PG3_MSG *msg, int type)
 {
+	int rc;
+
+	switch (type) {
+	case 0:
+		pgr_debugf("waiting to receive a message from fd %d", fd);
+		break;
+
+	case PG3_MSG_STARTUP:
+		pgr_debugf("waiting to receive StartupMessage from fd %d", fd);
+		break;
+
+	default:
+		pgr_debugf("waiting to receive message %d (%c) to fd %d",
+				type, isprint(type) ? type : '.', fd);
+		break;
+	}
+
+	/* FIXME: need a timeout version of pg3_recv */
+	rc = pg3_recv(fd, msg, type);
+	return rc == 0;
+}
+
+static int send_error_to(int fd, int error)
+{
+	int rc;
+	PG3_MSG msg;
+	PG3_ERROR err;
+	memset(&msg, 0, sizeof(msg));
+	memset(&err, 0, sizeof(err));
+
+	switch (error) {
+	case ERR_BADPROTO:
+		err.severity = "FATAL";
+		err.sqlstate = "08P01";
+		err.message  = "Protocol violation";
+		err.details  = "pgrouter encountered an invalid or inexpected protocol message";
+		break;
+
+	case ERR_CONNFAIL:
+		err.severity = "FATAL";
+		err.sqlstate = "08006";
+		err.message  = "Backend connection failed";
+		err.details  = "pgrouter was unable to connect to the desired backend database cluster";
+		err.hint     = "Check the health of your pgrouter backends";
+		break;
+
+	case ERR_BEFAIL:
+		err.severity = "FATAL";
+		err.sqlstate = "08000";
+		err.message  = "Failed to communicate to backend";
+		err.details  = "pgrouter was unable to communicate with the connected backend database cluster";
+		err.hint     = "Check the health of your pgrouter backends, and consult their logs";
+		break;
+
+	default:
+		err.severity = "PANIC";
+		err.sqlstate = "08000";
+		err.message  = "An unrecognized error has occurred";
+		err.details  = "pgrouter generated an error condition, but the type of error was not recognized.";
+		err.hint     = "Please file a bug report; this is an internal pgrouter error";
+		break;
+	}
+
+	pgr_debugf("sending error %d to fd %d: %s (%s) %s",
+			error, fd, err.severity, err.sqlstate, err.message);
+
+	rc = pg3_error(&msg, &err);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "unable to send ErrorResponse to fd %d: %s (errno %d)",
+				fd, strerror(errno), errno);
+		return 0;
+	}
+
+	rc = pg3_send(fd, &msg);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "unable to send ErrorResponse to fd %d: %s (errno %d)",
+				fd, strerror(errno), errno);
+		return 0;
+	}
+
 	return 1;
 }
 
-static int send_error_to(int fd, const char *error)
+static int relay_msg_to(int fd, PG3_MSG *msg)
 {
-	return 1;
-}
+	int rc;
 
-static int send_msg_to(int fd, PG3_MSG *msg)
-{
+	rc = pg3_send(fd, msg);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "unable to relay message to fd %d: %s (errno %d)",
+				fd, strerror(errno), errno);
+		return 0;
+	}
 	return 1;
 }
 
@@ -51,7 +168,6 @@ static void handle_client(CONTEXT *c, int fefd)
 	int rc, backend, befd, port;
 	char *host;
 	PG3_MSG msg;
-	PG3_ERROR err;
 
 	for (;;) {
 		switch (state) {
@@ -62,7 +178,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			}
 
 			if (!connect_to_any_backend(c, &backend, &befd)) {
-				send_error_to(fefd, "Unable to connect to a backend");
+				send_error_to(fefd, ERR_CONNFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -70,37 +186,42 @@ static void handle_client(CONTEXT *c, int fefd)
 			state = FSM_STARTED;
 			break;
 
+		case FSM_SHUTDOWN:
+			close(befd);
+			close(fefd);
+			return;
+
 		case FSM_STARTED:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
 			case PG3_MSG_AUTH:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_AUTH_REQUIRED; /* FIXME: only on Authentication requests */
 				break;
 
 			case PG3_MSG_NOTICE_RESPONSE:
 			case PG3_MSG_BACKEND_KEY_DATA:
 			case PG3_MSG_PARAMETER_STATUS:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				break;
 
 			case PG3_MSG_READY_FOR_QUERY:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_READY;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -115,8 +236,8 @@ static void handle_client(CONTEXT *c, int fefd)
 			switch (msg.type) {
 			case PG3_MSG_PASSWORD_MESSAGE:
 				/* FIXME: save the password message */
-				if (!send_msg_to(befd, &msg)) {
-					send_error_to(fefd, "Backend communication failure");
+				if (!relay_msg_to(befd, &msg)) {
+					send_error_to(fefd, ERR_BEFAIL);
 					state = FSM_SHUTDOWN;
 					break;
 				}
@@ -124,7 +245,7 @@ static void handle_client(CONTEXT *c, int fefd)
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -132,24 +253,24 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_AUTH_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
 			case PG3_MSG_AUTH:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_STARTED; /* FIXME: only on AuthenticationOk */
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -182,14 +303,14 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_QUERY_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
@@ -198,7 +319,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			case PG3_MSG_ROW_DESCRIPTION:
 			case PG3_MSG_DATA_ROW:
 			case PG3_MSG_EMPTY_QUERY_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				break;
 
 			case PG3_MSG_COPY_IN_RESPONSE:
@@ -207,12 +328,12 @@ static void handle_client(CONTEXT *c, int fefd)
 				pgr_abort(ABORT_UNIMPL);
 
 			case PG3_MSG_READY_FOR_QUERY:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_READY;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -220,24 +341,24 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_PARSE_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
 			case PG3_MSG_PARSE_COMPLETE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_BIND_READY;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -251,12 +372,12 @@ static void handle_client(CONTEXT *c, int fefd)
 
 			switch (msg.type) {
 			case PG3_MSG_BIND:
-				send_msg_to(befd, &msg);
+				relay_msg_to(befd, &msg);
 				state = FSM_BIND_SENT;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -264,24 +385,24 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_BIND_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
 			case PG3_MSG_BIND_COMPLETE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_EXEC_READY;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -295,12 +416,12 @@ static void handle_client(CONTEXT *c, int fefd)
 
 			switch (msg.type) {
 			case PG3_MSG_EXECUTE:
-				send_msg_to(befd, &msg);
+				relay_msg_to(befd, &msg);
 				state = FSM_EXEC_SENT;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -308,19 +429,19 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_EXEC_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_SHUTDOWN;
 				break;
 
 			case PG3_MSG_COMMAND_COMPLETE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				state = FSM_WAIT_SYNC;
 				break;
 
@@ -331,11 +452,11 @@ static void handle_client(CONTEXT *c, int fefd)
 
 			case PG3_MSG_DATA_ROW:
 			case PG3_MSG_EMPTY_QUERY_RESPONSE:
-				send_msg_to(fefd, &msg);
+				relay_msg_to(fefd, &msg);
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -349,12 +470,12 @@ static void handle_client(CONTEXT *c, int fefd)
 
 			switch (msg.type) {
 			case PG3_MSG_SYNC:
-				send_msg_to(befd, &msg);
+				relay_msg_to(befd, &msg);
 				state = FSM_SYNC_SENT;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -362,19 +483,19 @@ static void handle_client(CONTEXT *c, int fefd)
 
 		case FSM_SYNC_SENT:
 			if (!wait_for_message_from(befd, &msg, 0)) {
-				send_error_to(fefd, "Backend connection timed out");
+				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
 			switch (msg.type) {
 			case PG3_MSG_READY_FOR_QUERY:
-				send_msg_to(befd, &msg);
+				relay_msg_to(befd, &msg);
 				state = FSM_READY;
 				break;
 
 			default:
-				send_error_to(fefd, "Protocol violation");
+				send_error_to(fefd, ERR_BADPROTO);
 				state = FSM_SHUTDOWN;
 				break;
 			}
