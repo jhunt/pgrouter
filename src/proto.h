@@ -60,6 +60,7 @@ typedef struct {
 	char *hint;       /* */
 } PG3_ERROR;
 
+/* FIXME: need timeout variation of pg3_recv */
 int pg3_recv(int fd, PG3_MSG *msg, int type);
 int pg3_send(int fd, PG3_MSG *msg);
 void pf3_free(PG3_MSG *msg);

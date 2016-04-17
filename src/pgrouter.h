@@ -132,6 +132,11 @@ void pgr_vdlogf(FILE *io, int level, const char *file, int line, const char *fn,
 /* network subroutines */
 int pgr_listen4(const char *ep, int backlog);
 int pgr_listen6(const char *ep, int backlog);
+int pgr_connect_ep(const char *ep, int timeout_ms);
+int pgr_connect(const char *host, int port, int timeout_ms);
+int pgr_sendn(int fd, const void *buf, size_t n);
+int pgr_sendf(int fd, const char *fmt, ...);
+int pgr_recvn(int fd, const void *buf, size_t n);
 
 /* backend subroutines */
 int pgr_pick_any(CONTEXT *c);

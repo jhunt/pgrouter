@@ -33,7 +33,7 @@ static int getport(const char *ep)
 	return port;
 }
 
-char* gethost(const char *ep)
+static char* gethost(const char *ep)
 {
 	const char *p;
 	for (p = ep; *p != ':'; p++)
@@ -95,9 +95,33 @@ static int bind_and_listen(const char *ep, struct sockaddr* sa, int fd, int back
 	return fd;
 }
 
-int pgr_listen4(const char *ep, int backlog)
+static int ipv4_hostport(struct sockaddr_in *sa, const char *host, int port)
 {
-	int rc, fd, port;
+	int rc;
+
+	sa->sin_family = AF_INET;
+	sa->sin_port   = htons(port);
+
+	if (strcmp(host, "*") == 0) {
+		sa->sin_addr.s_addr = INADDR_ANY;
+
+	} else {
+		rc = inet_pton(AF_INET, host, &sa->sin_addr);
+		if (rc != 1) {
+			if (rc < 0 && errno == EAFNOSUPPORT) {
+				pgr_debugf("ipv4 address family not supported");
+			} else {
+				pgr_debugf("'%s' is not an ipv4 address", host);
+			}
+			return -1;
+		}
+	}
+	return 0;
+}
+
+static int ipv4_endpoint(struct sockaddr_in *sa, const char *ep)
+{
+	int rc, port;
 	char *host;
 
 	port = getport(ep);
@@ -107,28 +131,62 @@ int pgr_listen4(const char *ep, int backlog)
 		return -1;
 	}
 
-	struct sockaddr_in sa;
-	memset(&sa, 0, sizeof(sa));
-	sa.sin_family = AF_INET;
-	sa.sin_port   = htons(port);
+	rc = ipv4_hostport(sa, host, port);
+	free(host);
+	return rc;
+}
+
+static int ipv6_hostport(struct sockaddr_in6 *sa, const char *host, int port)
+{
+	int rc;
+
+	sa->sin6_family = AF_INET6;
+	sa->sin6_port   = htons(port);
 
 	if (strcmp(host, "*") == 0) {
-		sa.sin_addr.s_addr  = INADDR_ANY;
+		sa->sin6_addr = in6addr_any;
 
 	} else {
-		rc = inet_pton(AF_INET, host, &sa.sin_addr);
+		rc = inet_pton(AF_INET6, host, &sa->sin6_addr);
 		if (rc != 1) {
 			if (rc < 0 && errno == EAFNOSUPPORT) {
-				pgr_debugf("ipv4 address family not supported");
+				pgr_debugf("ipv6 address family not supported");
 			} else {
-				pgr_debugf("'%s' is not an ipv4 address", host);
+				pgr_debugf("'%s' is not an ipv6 address", host);
 			}
-			free(host);
 			return -1;
 		}
 	}
+	return 0;
+}
+
+static int ipv6_endpoint(struct sockaddr_in6 *sa, const char *ep)
+{
+	int rc, port;
+	char *host;
+
+	port = getport(ep);
+	host = gethost(ep);
+	if (port < 0 || !host) {
+		free(host);
+		return -1;
+	}
+
+	rc = ipv6_hostport(sa, host, port);
 	free(host);
-	host = NULL;
+	return 0;
+}
+
+int pgr_listen4(const char *ep, int backlog)
+{
+	int rc, fd;
+	struct sockaddr_in sa;
+
+	memset(&sa, 0, sizeof(sa));
+	rc = ipv4_endpoint(&sa, ep);
+	if (rc != 0) {
+		return rc;
+	}
 
 	fd = socket(sa.sin_family, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -143,38 +201,13 @@ int pgr_listen4(const char *ep, int backlog)
 
 int pgr_listen6(const char *ep, int backlog)
 {
-	int rc, fd, port;
-	char *host;
-
-	port = getport(ep);
-	host = gethost(ep);
-	if (port < 0 || !host) {
-		free(host);
-		return -1;
-	}
-
+	int rc, fd;
 	struct sockaddr_in6 sa;
 	memset(&sa, 0, sizeof(sa));
-	sa.sin6_family = AF_INET6;
-	sa.sin6_port   = htons(port);
-
-	if (strcmp(host, "*") == 0) {
-		sa.sin6_addr = in6addr_any;
-
-	} else {
-		rc = inet_pton(AF_INET6, host, &sa.sin6_addr);
-		if (rc != 1) {
-			if (rc < 0 && errno == EAFNOSUPPORT) {
-				pgr_debugf("ipv6 address family not supported");
-			} else {
-				pgr_debugf("'%s' is not an ipv6 address", host);
-			}
-			free(host);
-			return -1;
-		}
+	rc = ipv6_endpoint(&sa, ep);
+	if (rc != 0) {
+		return rc;
 	}
-	free(host);
-	host = NULL;
 
 	fd = socket(sa.sin6_family, SOCK_STREAM, 0);
 	if (fd < 0) {
@@ -185,4 +218,146 @@ int pgr_listen6(const char *ep, int backlog)
 
 	pgr_debugf("binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
+}
+
+int pgr_connect_ep(const char *ep, int timeout_ms)
+{
+	/* FIXME: honor timeout */
+	int rc, fd, type;
+	struct sockaddr_in ipv4;
+	struct sockaddr_in6 ipv6;
+	memset(&ipv4, 0, sizeof(ipv4));
+	memset(&ipv6, 0, sizeof(ipv6));
+
+	rc = ipv4_endpoint(&ipv4, ep);
+	if (rc == 0) {
+		fd = socket(ipv4.sin_family, SOCK_STREAM, 0);
+		type = 4;
+	} else {
+		rc = ipv6_endpoint(&ipv6, ep);
+		if (rc != 0) {
+			return 1;
+		}
+		fd = socket(ipv6.sin6_family, SOCK_STREAM, 0);
+		type = 6;
+	}
+	if (fd < 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to create an ipv%d socket for [%s]: %s (errno %d)",
+				type, ep, strerror(errno), errno);
+		return -1;
+	}
+
+	switch (type) {
+	case 4: rc = connect(fd, (struct sockaddr*)(&ipv4), sizeof(ipv4)); break;
+	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
+	default:
+		pgr_logf(stderr, LOG_ERR, "unrecognized IP version %d", type);
+		return -1;
+	}
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to connect (ipv%d) to %s: %s (errno %d)",
+				type, ep, strerror(errno), errno);
+		return rc;
+	}
+	return 0;
+}
+
+int pgr_connect(const char *host, int port, int timeout_ms)
+{
+	int rc, fd, type;
+	struct sockaddr_in ipv4;
+	struct sockaddr_in6 ipv6;
+	memset(&ipv4, 0, sizeof(ipv4));
+	memset(&ipv6, 0, sizeof(ipv6));
+
+	rc = ipv4_hostport(&ipv4, host, port);
+	if (rc == 0) {
+		fd = socket(ipv4.sin_family, SOCK_STREAM, 0);
+		type = 4;
+	} else {
+		rc = ipv6_hostport(&ipv6, host, port);
+		if (rc != 0) {
+			return 1;
+		}
+		fd = socket(ipv6.sin6_family, SOCK_STREAM, 0);
+		type = 6;
+	}
+	if (fd < 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to create an ipv%d socket for host %s on port %d: %s (errno %d)",
+				type, host, port, strerror(errno), errno);
+		return -1;
+	}
+
+	switch (type) {
+	case 4: rc = connect(fd, (struct sockaddr*)(&ipv4), sizeof(ipv4)); break;
+	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
+	default:
+		pgr_logf(stderr, LOG_ERR, "unrecognized IP version %d", type);
+		return -1;
+	}
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to connect (ipv%d) to host %s on port %d: %s (errno %d)",
+				type, host, port, strerror(errno), errno);
+		return rc;
+	}
+	return 0;
+}
+
+int pgr_sendn(int fd, const void *buf, size_t n)
+{
+	size_t nwrit;
+	const void *p = buf;
+	pgr_debugf("writing %d bytes to fd %d", n, fd);
+	while (n > 0) {
+		nwrit = write(fd, p, n);
+		if (nwrit <= 0) {
+			pgr_debugf("failed to write to fd %d: %s (errno %d)",
+					fd, strerror(errno), errno);
+			return 1;
+		}
+		n -= nwrit;
+		p += nwrit;
+		pgr_debugf("wrote %d bytes to fd %d; %d bytes left",
+				nwrit, fd, n);
+	}
+
+	pgr_debugf("done writing to fd %d", fd);
+	return 0;
+}
+
+int pgr_sendf(int fd, const char *fmt, ...)
+{
+	int rc, n;
+	char *buf;
+	va_list ap;
+
+	va_start(ap, fmt);
+	n = vasprintf(&buf, fmt, ap);
+	va_end(ap);
+
+	rc = pgr_sendn(fd, buf, n);
+	free(buf);
+	return rc;
+}
+
+int pgr_recvn(int fd, const void *buf, size_t n)
+{
+	size_t nread;
+	const void *p = buf;
+	while (n > 0) {
+		nread = read(fd, p, n);
+		if (nread < 0) {
+			pgr_debugf("failed to read from fd %d: %s (errno %d)",
+					fd, strerror(errno), errno);
+			return 1;
+		}
+
+		n -= nread;
+		p += nread;
+		pgr_debugf("read %d bytes from fd %d; %d bytes left",
+				nread, fd, n);
+	}
+
+	pgr_debugf("done reading from fd %d", fd);
+	return 0;
 }

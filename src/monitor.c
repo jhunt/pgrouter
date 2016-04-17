@@ -13,35 +13,6 @@
 
 #define max(a,b) ((a) > (b) ? (a) : (b))
 
-static int writef(int fd, const char *fmt, ...)
-{
-	int n, wr;
-	char *buf;
-	va_list ap;
-
-	va_start(ap, fmt);
-	n = vasprintf(&buf, fmt, ap);
-	va_end(ap);
-
-	if (n > 0 && buf[n - 1] == '\n') {
-		buf[n-1] = '.';
-		pgr_debugf("writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
-		buf[n-1] = '\n';
-	} else {
-		pgr_debugf("writing %d/%d bytes to fd %d [%s]", n, n, fd, buf);
-	}
-	wr = 0;
-	while ((wr = write(fd, buf + wr, n)) > 0) {
-		pgr_debugf("  wrote %d/%d bytes to fd %d (%d remain)",
-			wr, n, fd, n - wr);
-		n -= wr;
-	}
-	if (wr < 0) {
-		return wr;
-	}
-	return n;
-}
-
 static void handle_client(CONTEXT *c, int connfd)
 {
 	int rc, i;
@@ -51,10 +22,10 @@ static void handle_client(CONTEXT *c, int connfd)
 		return;
 	}
 
-	writef(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
-	writef(connfd, "workers %d\n", c->workers);
-	writef(connfd, "clients ??\n"); /* FIXME: get real data */
-	writef(connfd, "connections ??\n"); /* FIXME: get real data */
+	pgr_sendf(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
+	pgr_sendf(connfd, "workers %d\n", c->workers);
+	pgr_sendf(connfd, "clients ??\n"); /* FIXME: get real data */
+	pgr_sendf(connfd, "connections ??\n"); /* FIXME: get real data */
 
 	for (i = 0; i < c->num_backends; i++) {
 		rc = rdlock(&c->backends[i].lock, "backend", i);
@@ -64,7 +35,7 @@ static void handle_client(CONTEXT *c, int connfd)
 
 		switch (c->backends[i].status) {
 		case BACKEND_IS_OK:
-			writef(connfd, "%s:%d %s %s %llu/%llu\n",
+			pgr_sendf(connfd, "%s:%d %s %s %llu/%llu\n",
 					c->backends[i].hostname, c->backends[i].port,
 					pgr_backend_role(c->backends[i].role),
 					pgr_backend_status(c->backends[i].status),
@@ -73,7 +44,7 @@ static void handle_client(CONTEXT *c, int connfd)
 			break;
 
 		default:
-			writef(connfd, "%s:%d %s %s\n",
+			pgr_sendf(connfd, "%s:%d %s %s\n",
 					c->backends[i].hostname, c->backends[i].port,
 					pgr_backend_role(c->backends[i].role),
 					pgr_backend_status(c->backends[i].status));

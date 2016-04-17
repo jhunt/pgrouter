@@ -1,40 +1,51 @@
+#include "pgrouter.h"
 #include "proto.h"
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
 
 int pg3_recv(int fd, PG3_MSG *msg, int type)
 {
-	size_t nread;
+	errno = EIO;
+	int rc;
 
 	if (type == 0) {
-		if (read(fd, &msg->type, sizeof(msg->type)) != sizeof(msg->type)) {
-			return -1;
+		rc = pgr_recvn(fd, &msg->type, sizeof(msg->type));
+		if (rc != 0) {
+			return rc;
 		}
 	} else {
 		msg->type = type;
 	}
-	if (read(fd, &msg->length, sizeof(msg->length)) != sizeof(msg->type)) {
-		return -1;
+	pgr_debugf("message type is %d (%c)",
+			msg->type, isprint(msg->type) ? msg->type : '.');
+
+	rc = pgr_recvn(fd, &msg->length, sizeof(msg->length));
+	if (rc != 0) {
+		return rc;
+	}
+	msg->length = ntohl(msg->length);
+	pgr_debugf("message is %d octets long", msg->length);
+
+	if (msg->length > 65536) {
+		pgr_debugf("message is too long; bailing");
+		return 3;
 	}
 
-	msg->data = malloc(msg->length);
-	if (!msg->data) {
-		return -1;
-	}
-
-	uint8_t *p = msg->data;
-	size_t nleft = msg->length;
-	while (nleft > 0) {
-		nread = read(fd, p, nleft);
-		if (nread < 0) {
-			free(msg->data);
-			msg->data = NULL;
-			return -1;
+	if (msg->length > sizeof(msg->length)) {
+		pgr_debugf("allocating a %d byte buffer to store message payload",
+				msg->length - sizeof(msg->length));
+		msg->data = malloc(msg->length - sizeof(msg->length));
+		if (!msg->data) {
+			return 4;
 		}
 
-		nleft -= nread;
-		p += nread;
+		rc = pgr_recvn(fd, msg->data, msg->length - sizeof(msg->length));
+		if (rc != 0) {
+			free(msg->data);
+			return rc;
+		}
 	}
 
 	return 0;
@@ -42,30 +53,30 @@ int pg3_recv(int fd, PG3_MSG *msg, int type)
 
 int pg3_send(int fd, PG3_MSG *msg)
 {
-	/* FIXME: handle legacy, non-typed messages */
-	size_t nwrit;
+	int rc;
+	uint32_t len;
 
-	if (write(fd, &msg->type, sizeof(msg->type)) != sizeof(msg->type)) {
-		return -1;
-	}
-	uint32_t len = msg->length;
-	htonl(len);
-	if (write(fd, &len, sizeof(len)) != sizeof(len)) {
-		return -1;
-	}
-
-	len = msg->length;
-	uint8_t *p;
-	while (len > 0) {
-		nwrit = write(fd, p, len);
-		if (nwrit <= 0) {
-			return -1;
+	if (msg->type < 0x80) {
+		rc = pgr_sendn(fd, &msg->type, sizeof(msg->type));
+		if (rc != 0) {
+			return rc;
 		}
-		len -= nwrit;
-		p += nwrit;
+	}
+	len = htonl(msg->length);
+	pgr_debugf("converted %08x (%d) length to network byte order as %08x",
+			msg->length, msg->length, len);
+	rc = pgr_sendn(fd, &len, sizeof(len));
+	if (rc != 0) {
+		return rc;
 	}
 
-	return 0;
+	if (msg->length > 4) {
+		rc = pgr_sendn(fd, msg->data, msg->length - 4);
+		if (rc != 0) {
+			return rc;
+		}
+	}
+	return 1;
 }
 
 void pg3_free(PG3_MSG *msg)
