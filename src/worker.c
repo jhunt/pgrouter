@@ -500,6 +500,12 @@ static void handle_client(CONTEXT *c, int fefd)
 				break;
 			}
 			break;
+
+		default:
+			pgr_debugf("UNKNOWN FSM STATE %d (%#02x)", state, state);
+			pgr_logf(stderr, LOG_ERR, "finite state machine appears to be in a bad state (%d / %#02x); please file a bug report",
+					state, state);
+			pgr_abort(ABORT_ABSURD);
 		}
 	}
 }

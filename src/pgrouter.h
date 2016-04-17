@@ -36,6 +36,7 @@ char* pgr_backend_role(int role);
 #define ABORT_SYSCALL  5
 #define ABORT_RANDFAIL 6
 #define ABORT_UNIMPL   7
+#define ABORT_ABSURD   8
 
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
