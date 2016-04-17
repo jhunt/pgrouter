@@ -76,7 +76,7 @@ int pg3_send(int fd, PG3_MSG *msg)
 			return rc;
 		}
 	}
-	return 1;
+	return 0;
 }
 
 void pg3_free(PG3_MSG *msg)

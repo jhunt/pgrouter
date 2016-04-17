@@ -314,7 +314,7 @@ int pgr_connect(const char *host, int port, int timeout_ms)
 
 int pgr_sendn(int fd, const void *buf, size_t n)
 {
-	size_t nwrit;
+	ssize_t nwrit;
 	const void *p = buf;
 	pgr_debugf("writing %d bytes to fd %d", n, fd);
 	while (n > 0) {
@@ -351,11 +351,11 @@ int pgr_sendf(int fd, const char *fmt, ...)
 
 int pgr_recvn(int fd, const void *buf, size_t n)
 {
-	size_t nread;
+	ssize_t nread;
 	const void *p = buf;
 	while (n > 0) {
 		nread = read(fd, p, n);
-		if (nread < 0) {
+		if (nread <= 0) {
 			pgr_debugf("failed to read from fd %d: %s (errno %d)",
 					fd, strerror(errno), errno);
 			return 1;
