@@ -332,6 +332,10 @@ static void handle_client(CONTEXT *c, int fefd)
 				break;
 			}
 
+			relay_msg_to(befd, &msg);
+			state = FSM_QUERY_SENT;
+			break;
+
 			pgr_abort(ABORT_UNIMPL);
 			/* FIXME: wait for message from fefd, or disconnect and exit */
 			/* FIXME: on Query: */
@@ -366,10 +370,6 @@ static void handle_client(CONTEXT *c, int fefd)
 
 			switch (msg.type) {
 			case PG3_MSG_ERROR_RESPONSE:
-				relay_msg_to(fefd, &msg);
-				state = FSM_SHUTDOWN;
-				break;
-
 			case PG3_MSG_NOTICE_RESPONSE:
 			case PG3_MSG_COMMAND_COMPLETE:
 			case PG3_MSG_ROW_DESCRIPTION:
