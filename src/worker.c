@@ -86,28 +86,17 @@ static int connect_to_any_backend(CONTEXT *c, int *i, int *fd)
 	return 1;
 }
 
-static int wait_for_msg_from(int fd, PG3_MSG *msg, int type)
+static int wait_for_msg_from(int fd, PG3_MSG *msg, int typed)
 {
-	int rc;
-
-	switch (type) {
-	case 0:
-		pgr_debugf("waiting to receive a message from fd %d", fd);
-		break;
-
-	case PG3_MSG_STARTUP:
-		pgr_debugf("waiting to receive StartupMessage from fd %d", fd);
-		break;
-
-	default:
-		pgr_debugf("waiting to receive message %d (%c) to fd %d",
-				type, isprint(type) ? type : '.', fd);
-		break;
-	}
-
+	pgr_debugf("waiting to receive a message from fd %d", fd);
 	/* FIXME: need a timeout version of pg3_recv */
-	rc = pg3_recv(fd, msg, type);
-	return rc == 0;
+	int rc = pg3_recv(fd, msg, typed);
+	if (rc == 0) {
+		pgr_debugf("received a [%s] message (%02x / %c)",
+				pg3_type_name(msg->type), msg->type, msg->type);
+		return 1;
+	}
+	return 0;
 }
 
 static int send_error_to(int fd, int error)
@@ -197,27 +186,52 @@ static void handle_client(CONTEXT *c, int fefd)
 
 	for (;;) {
 		pgr_debugf("FSM[%s] backend = %d, fefd = %d, befd = %d",
-				fsm_name(FSM_START), backend, fefd, befd);
+				fsm_name(state), backend, fefd, befd);
 		switch (state) {
 		case FSM_START:
-			if (!wait_for_msg_from(fefd, &msg, PG3_MSG_STARTUP)) {
+			if (!wait_for_msg_from(fefd, &msg, 0)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
 
-			if (!connect_to_any_backend(c, &backend, &befd)) {
-				send_error_to(fefd, ERR_CONNFAIL);
-				state = FSM_SHUTDOWN;
-				break;
-			}
-			pgr_debugf("connected to backend/%d; fefd = %d, befd = %d",
-					backend, fefd, befd);
+			switch (msg.type) {
+			case PG3_MSG_STARTUP:
+				if (!connect_to_any_backend(c, &backend, &befd)) {
+					send_error_to(fefd, ERR_CONNFAIL);
+					state = FSM_SHUTDOWN;
+					break;
+				}
+				pgr_debugf("connected to backend/%d; fefd = %d, befd = %d",
+						backend, fefd, befd);
 
-			if (!relay_msg_to(befd, &msg)) {
+				if (!relay_msg_to(befd, &msg)) {
+					state = FSM_SHUTDOWN;
+					break;
+				}
+				state = FSM_STARTED;
+				break;
+
+			case PG3_MSG_CANCEL_REQUEST:
+				pgr_debugf("CancelRequest not implemented!");
+				pgr_abort(ABORT_UNIMPL);
+				break;
+
+			case PG3_MSG_SSL_REQUEST:
+				if (write(fefd, "N", 1) != 1) {
+					pgr_debugf("failed to send SSL response to fd %d: %s (errno %d)",
+							fefd, strerror(errno), errno);
+					state = FSM_SHUTDOWN;
+					break;
+				}
+				break;
+
+			default:
+				pgr_logf(stderr, LOG_ERR, "received unrecognized message type %d (%c); disconnecting",
+						msg.type, isprint(msg.type) ? msg.type : '.');
 				state = FSM_SHUTDOWN;
 				break;
 			}
-			state = FSM_STARTED;
+
 			break;
 
 		case FSM_SHUTDOWN:
@@ -228,7 +242,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			return;
 
 		case FSM_STARTED:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -264,7 +278,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_AUTH_REQUIRED:
-			if (!wait_for_msg_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 1)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -288,7 +302,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_AUTH_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -313,6 +327,12 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_READY:
+			if (!wait_for_msg_from(fefd, &msg, 1)) {
+				state = FSM_SHUTDOWN;
+				break;
+			}
+
+			pgr_abort(ABORT_UNIMPL);
 			/* FIXME: wait for message from fefd, or disconnect and exit */
 			/* FIXME: on Query: */
 			/* FIXME:   inspect query contents to determine if it is RO or RW */
@@ -338,7 +358,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_QUERY_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -376,7 +396,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_PARSE_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -401,7 +421,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_BIND_READY:
-			if (!wait_for_msg_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 1)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -420,7 +440,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_BIND_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -445,7 +465,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_EXEC_READY:
-			if (!wait_for_msg_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 1)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -464,7 +484,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_EXEC_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;
@@ -499,7 +519,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_WAIT_SYNC:
-			if (!wait_for_msg_from(fefd, &msg, 0)) {
+			if (!wait_for_msg_from(fefd, &msg, 1)) {
 				state = FSM_SHUTDOWN;
 				break;
 			}
@@ -518,7 +538,7 @@ static void handle_client(CONTEXT *c, int fefd)
 			break;
 
 		case FSM_SYNC_SENT:
-			if (!wait_for_msg_from(befd, &msg, 0)) {
+			if (!wait_for_msg_from(befd, &msg, 1)) {
 				send_error_to(fefd, ERR_BEFAIL);
 				state = FSM_SHUTDOWN;
 				break;

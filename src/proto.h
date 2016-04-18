@@ -14,13 +14,12 @@
 #define  PG3_MSG_BIND_COMPLETE           '2'   /*  backend   */
 #define  PG3_MSG_CLOSE_COMPLETE          '3'   /*  backend   */
 #define  PG3_MSG_NOTIFICATION_RESPONSE   'A'   /*  backend   */
-#define  PG3_MSG_PARAMETER_DESCRIPTION   'B'   /*  backend   */
 #define  PG3_MSG_BIND                    'B'   /*  frontend  */
 #define  PG3_MSG_COMMAND_COMPLETE        'C'   /*  backend   */
 #define  PG3_MSG_COPY_DONE               'c'   /*  BOTH      */
 #define  PG3_MSG_CLOSE                   'C'   /*  frontend  */
-#define  PG3_MSG_DATA_ROW                'D'   /*  backend   */
 #define  PG3_MSG_COPY_DATA               'd'   /*  BOTH      */
+#define  PG3_MSG_DATA_ROW                'D'   /*  backend   */
 #define  PG3_MSG_DESCRIBE                'D'   /*  frontend  */
 #define  PG3_MSG_ERROR_RESPONSE          'E'   /*  backend   */
 #define  PG3_MSG_EXECUTE                 'E'   /*  frontend  */
@@ -40,11 +39,14 @@
 #define  PG3_MSG_PORTAL_SUSPENDED        's'   /*  backend   */
 #define  PG3_MSG_PARAMETER_STATUS        'S'   /*  backend   */
 #define  PG3_MSG_SYNC                    'S'   /*  frontend  */
+#define  PG3_MSG_PARAMETER_DESCRIPTION   't'   /*  backend   */
 #define  PG3_MSG_ROW_DESCRIPTION         'T'   /*  backend   */
 #define  PG3_MSG_FUNCTION_CALL_RESPONSE  'V'   /*  backend   */
 #define  PG3_MSG_COPY_BOTH_RESPONSE      'W'   /*  backend   */
 #define  PG3_MSG_TERMINATE               'X'   /*  frontend  */
 #define  PG3_MSG_READY_FOR_QUERY         'Z'   /*  backend   */
+
+const char* pg3_type_name(int type);
 
 typedef struct {
 	uint8_t type;     /* one of the PG3_MSG_* constants      */
@@ -61,7 +63,7 @@ typedef struct {
 } PG3_ERROR;
 
 /* FIXME: need timeout variation of pg3_recv */
-int pg3_recv(int fd, PG3_MSG *msg, int type);
+int pg3_recv(int fd, PG3_MSG *msg, int typed);
 int pg3_send(int fd, PG3_MSG *msg);
 void pf3_free(PG3_MSG *msg);
 
