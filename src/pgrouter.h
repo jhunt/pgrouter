@@ -134,6 +134,18 @@ int pgr_configure(CONTEXT *c, const char *file, int reload);
 int pgr_authdb(CONTEXT *c, int reload);
 int pgr_context(CONTEXT *c);
 
+/* hashing subroutines */
+typedef struct {
+	unsigned int  hi, lo;
+	unsigned int  a, b, c, d;
+	unsigned char buf[64];
+	unsigned int  blk[16];
+} MD5;
+void pgr_md5_init(MD5 *md5);
+void pgr_md5_update(MD5 *md5, const void *data, size_t len);
+void pgr_md5_raw(unsigned char dst[16], MD5 *md5);
+void pgr_md5_hex(char dst[32], MD5 *md5);
+
 /* logging subroutines */
 void pgr_logger(int level);
 void pgr_logf(FILE *io, int level, const char *fmt, ...);

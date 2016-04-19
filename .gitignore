@@ -35,6 +35,7 @@ stamp-h?
 build/*
 
 /fuzz/out*
-/t/cfgtest
 /t/authdbtest
+/t/cfgtest
+/t/md5test
 /pgrouter
