@@ -3,10 +3,13 @@
 AUTOMAKE_OPTIONS = foreign subdir-objects
 ACLOCAL_AMFLAGS = -I build
 
-bin_PROGRAMS = t/authdbtest t/cfgtest t/md5test \
+bin_PROGRAMS = t/authdbtest t/authtest t/cfgtest t/md5test \
                pgrouter
 t_authdbtest_SOURCES = src/authdb.c src/log.c src/abort.c
 t_authdbtest_CFLAGS = -DPTEST
+t_authtest_SOURCES = src/authdb.c src/log.c src/abort.c src/md5.c src/init.c
+t_authtest_CFLAGS = -DATEST
+t_authtest_LDADD = -lpthread
 t_cfgtest_SOURCES = src/config.c src/log.c src/abort.c src/net.c
 t_cfgtest_CFLAGS = -DPTEST
 t_md5test_SOURCES = src/md5.c

@@ -134,6 +134,9 @@ int pgr_configure(CONTEXT *c, const char *file, int reload);
 int pgr_authdb(CONTEXT *c, int reload);
 int pgr_context(CONTEXT *c);
 
+/* authentication subroutines */
+const char* pgr_auth_find(CONTEXT *c, const char *username);
+
 /* hashing subroutines */
 typedef struct {
 	unsigned int  hi, lo;

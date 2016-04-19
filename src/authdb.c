@@ -5,6 +5,9 @@
 #include <limits.h>
 #include <errno.h>
 
+#define SUBSYS "authdb"
+#include "locks.inc.c"
+
 #define C_ALPHA   "abcdefghijklmnopqrstuvwxyz" "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 #define C_NUMERIC "0123456789"
 #define C_ALPHANUMERIC C_ALPHA C_NUMERIC
@@ -578,7 +581,32 @@ int pgr_authdb(CONTEXT *c, int reload)
 	return 0;
 }
 
-#ifdef PTEST
+const char* pgr_auth_find(CONTEXT *c, const char *username)
+{
+	int rc, i;
+	const char *md5;
+
+	rc = rdlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		return NULL;
+	}
+
+	md5 = NULL;
+	for (i = 0; i < c->authdb.num_entries; i++) {
+		if (strcmp(c->authdb.usernames[i], username) == 0) {
+			md5 = c->authdb.md5hashes[i];
+			break;
+		}
+	}
+
+	rc = unlock(&c->lock, "context", 0);
+	if (rc != 0) {
+		return NULL;
+	}
+	return md5;
+}
+
+#if defined(PTEST)
 static char *quote(const char *s)
 {
 	int len = 0;
@@ -646,5 +674,55 @@ int main(int argc, char **argv)
 	}
 
 	return 0;
+}
+#elif defined(ATEST)
+int main(int argc, char **argv)
+{
+	int rc;
+	CONTEXT c;
+	MD5 md5;
+	char hash[33], *buf;
+	const char *check;
+
+	if (argc != 4) {
+		fprintf(stderr, "USAGE: %s /path/to/authdb user password\n", argv[0]);
+		return 0;
+	}
+
+	rc = pgr_context(&c);
+	if (rc != 0) {
+		fprintf(stderr, "failed to initialize global context\n");
+		return 1;
+	}
+	pgr_md5_init(&md5);
+
+	c.authdb.file = argv[1];
+	rc = pgr_authdb(&c, 0);
+	if (rc != 0) {
+		fprintf(stderr, "failed to read authdb %s\n", c.authdb.file);
+		return 1;
+	}
+
+	check = pgr_auth_find(&c, argv[2]);
+	if (check == NULL) {
+		fprintf(stderr, "%s: no such user\n", argv[2]);
+		return 1;
+	}
+
+	rc = asprintf(&buf, "%s%s", argv[3], argv[2]);
+	if (rc == -1) {
+		fprintf(stderr, "failed to create pre-hash string buffer\n");
+		return 1;
+	}
+
+	pgr_md5_update(&md5, buf, strlen(buf));
+	pgr_md5_hex(hash, &md5);
+	if (strncmp(hash, check, 32) == 0) {
+		printf("%s OK\n", argv[2]);
+		return 0;
+	}
+
+	fprintf(stderr, "%s: authentication failed\n", argv[2]);
+	return 1;
 }
 #endif

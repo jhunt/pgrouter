@@ -36,6 +36,7 @@ build/*
 
 /fuzz/out*
 /t/authdbtest
+/t/authtest
 /t/cfgtest
 /t/md5test
 /pgrouter
