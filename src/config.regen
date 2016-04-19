@@ -69,6 +69,7 @@ token error
 token open
 token close
 token termx
+keyword authdb
 keyword backend
 keyword cert
 keyword check

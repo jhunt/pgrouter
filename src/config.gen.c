@@ -4,47 +4,49 @@
 #define T_OPEN                   259
 #define T_CLOSE                  260
 #define T_TERMX                  261
-#define T_KEYWORD_BACKEND        262
-#define T_KEYWORD_CERT           263
-#define T_KEYWORD_CHECK          264
-#define T_KEYWORD_CIPHERS        265
-#define T_KEYWORD_DATABASE       266
-#define T_KEYWORD_DEBUG          267
-#define T_KEYWORD_DEFAULT        268
-#define T_KEYWORD_ERROR          269
-#define T_KEYWORD_GROUP          270
-#define T_KEYWORD_HBA            271
-#define T_KEYWORD_HEALTH         272
-#define T_KEYWORD_INFO           273
-#define T_KEYWORD_KEY            274
-#define T_KEYWORD_LAG            275
-#define T_KEYWORD_LISTEN         276
-#define T_KEYWORD_LOG            277
-#define T_KEYWORD_MONITOR        278
-#define T_KEYWORD_OFF            279
-#define T_KEYWORD_ON             280
-#define T_KEYWORD_PASSWORD       281
-#define T_KEYWORD_PIDFILE        282
-#define T_KEYWORD_SKIPVERIFY     283
-#define T_KEYWORD_TIMEOUT        284
-#define T_KEYWORD_TLS            285
-#define T_KEYWORD_USER           286
-#define T_KEYWORD_USERNAME       287
-#define T_KEYWORD_WEIGHT         288
-#define T_KEYWORD_WORKERS        289
-#define T_TYPE_BAREWORD          290
-#define T_TYPE_DECIMAL           291
-#define T_TYPE_INTEGER           292
-#define T_TYPE_ADDRESS           293
-#define T_TYPE_TIME              294
-#define T_TYPE_SIZE              295
-#define T_TYPE_QSTRING           296
+#define T_KEYWORD_AUTHDB         262
+#define T_KEYWORD_BACKEND        263
+#define T_KEYWORD_CERT           264
+#define T_KEYWORD_CHECK          265
+#define T_KEYWORD_CIPHERS        266
+#define T_KEYWORD_DATABASE       267
+#define T_KEYWORD_DEBUG          268
+#define T_KEYWORD_DEFAULT        269
+#define T_KEYWORD_ERROR          270
+#define T_KEYWORD_GROUP          271
+#define T_KEYWORD_HBA            272
+#define T_KEYWORD_HEALTH         273
+#define T_KEYWORD_INFO           274
+#define T_KEYWORD_KEY            275
+#define T_KEYWORD_LAG            276
+#define T_KEYWORD_LISTEN         277
+#define T_KEYWORD_LOG            278
+#define T_KEYWORD_MONITOR        279
+#define T_KEYWORD_OFF            280
+#define T_KEYWORD_ON             281
+#define T_KEYWORD_PASSWORD       282
+#define T_KEYWORD_PIDFILE        283
+#define T_KEYWORD_SKIPVERIFY     284
+#define T_KEYWORD_TIMEOUT        285
+#define T_KEYWORD_TLS            286
+#define T_KEYWORD_USER           287
+#define T_KEYWORD_USERNAME       288
+#define T_KEYWORD_WEIGHT         289
+#define T_KEYWORD_WORKERS        290
+#define T_TYPE_BAREWORD          291
+#define T_TYPE_DECIMAL           292
+#define T_TYPE_INTEGER           293
+#define T_TYPE_ADDRESS           294
+#define T_TYPE_TIME              295
+#define T_TYPE_SIZE              296
+#define T_TYPE_QSTRING           297
 
 /* keyword lookup table */
 static struct {
 	int         value;
 	const char *match;
 } KEYWORDS[] = {
+	{ T_KEYWORD_AUTHDB,        "authdb"        },
 	{ T_KEYWORD_BACKEND,       "backend"       },
 	{ T_KEYWORD_CERT,          "cert"          },
 	{ T_KEYWORD_CHECK,         "check"         },
@@ -88,6 +90,7 @@ static struct {
 	{ T_OPEN,                  "T_OPEN",                NULL            },
 	{ T_CLOSE,                 "T_CLOSE",               NULL            },
 	{ T_TERMX,                 "T_TERMX",               NULL            },
+	{ T_KEYWORD_AUTHDB,        "T_KEYWORD_AUTHDB",      "authdb"        },
 	{ T_KEYWORD_BACKEND,       "T_KEYWORD_BACKEND",     "backend"       },
 	{ T_KEYWORD_CERT,          "T_KEYWORD_CERT",        "cert"          },
 	{ T_KEYWORD_CHECK,         "T_KEYWORD_CHECK",       "check"         },

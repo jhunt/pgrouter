@@ -106,6 +106,7 @@ struct __p {
 	strval_t tls_keyfile;
 	strval_t user;
 	strval_t group;
+	strval_t authdb;
 
 	LEXER *l;      /* lexer to get tokens from */
 	parser_fn f;   /* current parser function  */
@@ -525,7 +526,7 @@ static TOKEN lex_wildcard(LEXER *l)
 	return token(T_ERROR, NULL);
 }
 
-LEXER* lexer_init(const char *file, FILE *io)
+static LEXER* lexer_init(const char *file, FILE *io)
 {
 	pgr_debugf("intializing a new lexer for %s (io %p)", file, io);
 
@@ -721,6 +722,7 @@ static int parse_top(PARSER *p)
 	case T_KEYWORD_USER:
 	case T_KEYWORD_GROUP:
 	case T_KEYWORD_PIDFILE:
+	case T_KEYWORD_AUTHDB:
 		t2 = emit(p->l);
 		s = as_string(&t2);
 		if (!s) {
@@ -733,6 +735,7 @@ static int parse_top(PARSER *p)
 		case T_KEYWORD_USER:     set_str(&p->user, s);    break;
 		case T_KEYWORD_GROUP:    set_str(&p->group, s);   break;
 		case T_KEYWORD_PIDFILE:  set_str(&p->pidfile, s); break;
+		case T_KEYWORD_AUTHDB:   set_str(&p->authdb, s);  break;
 		}
 		return 0;
 
@@ -1117,6 +1120,16 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 			                p->pidfile.value, c->startup.pidfile);
 			free(p->pidfile.value);
 			p->pidfile.value = c->startup.pidfile;
+		}
+	}
+	if (p->authdb.set) {
+		if (!reload) {
+			c->authdb.file = p->authdb.value;
+		} else if (strcmp(p->authdb.value, c->authdb.file) != 0) {
+			fprintf(stderr, "ignoring new value for `authdb %s`; retaining old value '%s'\n",
+			                p->authdb.value, c->authdb.file);
+			free(p->authdb.value);
+			p->authdb.value = c->authdb.file;
 		}
 	}
 	if (p->tls_ciphers.set) {

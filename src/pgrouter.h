@@ -92,6 +92,13 @@ typedef struct {
 	} health;
 
 	struct {
+		char *file;             /* path to authdb               */
+		int num_entries;        /* how many entries are there?  */
+		char **usernames;       /* username entries             */
+		char **md5hashes;       /* md5(password + username)     */
+	} authdb;
+
+	struct {
 		char *frontend;         /* frontend bind endpoint       */
 		char *monitor;          /* monitor bind endpoint        */
 
@@ -124,6 +131,7 @@ void pgr_srand(int seed);
 
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
+int pgr_authdb(CONTEXT *c, int reload);
 int pgr_context(CONTEXT *c);
 
 /* logging subroutines */

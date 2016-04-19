@@ -3,8 +3,10 @@
 AUTOMAKE_OPTIONS = foreign subdir-objects
 ACLOCAL_AMFLAGS = -I build
 
-bin_PROGRAMS = t/cfgtest \
+bin_PROGRAMS = t/authdbtest t/cfgtest \
                pgrouter
+t_authdbtest_SOURCES = src/authdb.c src/log.c src/abort.c
+t_authdbtest_CFLAGS = -DPTEST
 t_cfgtest_SOURCES = src/config.c src/log.c src/abort.c src/net.c
 t_cfgtest_CFLAGS = -DPTEST
 
