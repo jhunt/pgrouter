@@ -346,10 +346,10 @@ int pgr_sendf(int fd, const char *fmt, ...)
 	return rc;
 }
 
-int pgr_recvn(int fd, const void *buf, size_t n)
+int pgr_recvn(int fd, void *buf, size_t n)
 {
 	ssize_t nread;
-	const void *p = buf;
+	void *p = buf;
 	while (n > 0) {
 		nread = read(fd, p, n);
 		if (nread <= 0) {

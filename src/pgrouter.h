@@ -217,7 +217,7 @@ int pgr_connect_ep(const char *ep, int timeout_ms);
 int pgr_connect(const char *host, int port, int timeout_ms);
 int pgr_sendn(int fd, const void *buf, size_t n);
 int pgr_sendf(int fd, const char *fmt, ...);
-int pgr_recvn(int fd, const void *buf, size_t n);
+int pgr_recvn(int fd, void *buf, size_t n);
 
 /* connection subroutines */
 void pgr_conn_init(CONTEXT *c, CONNECTION *dst);
