@@ -1,3 +1,4 @@
+#include <pthread.h>
 #ifndef SUBSYS
 #define SUBSYS "UNKNOWN-SUBSYSTEM"
 #endif

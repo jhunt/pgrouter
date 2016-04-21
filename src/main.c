@@ -84,6 +84,12 @@ int main(int argc, char **argv)
 				strerror(errno), errno);
 		return 3;
 	}
+	rc = pgr_authdb(&c, 0);
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to initialize authdb: %s (errno %d)",
+				strerror(errno), errno);
+		return 3;
+	}
 
 	pgr_logf(stderr, LOG_INFO, "[super] binding frontend to %s", c.startup.frontend);
 	c.frontend4 = pgr_listen4(c.startup.frontend, FRONTEND_BACKLOG);

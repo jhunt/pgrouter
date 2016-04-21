@@ -992,7 +992,7 @@ static int parse_tls(PARSER *p)
 	return 0;
 }
 
-PARSER* parser_init(const char *file, FILE *io, int reload)
+static PARSER* parser_init(const char *file, FILE *io, int reload)
 {
 	PARSER *p = calloc(1, sizeof(PARSER));
 	if (!p) {

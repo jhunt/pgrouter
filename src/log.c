@@ -1,5 +1,6 @@
 #include "pgrouter.h"
 #include <stdio.h>
+#include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <syslog.h>
@@ -113,5 +114,30 @@ void pgr_vdlogf(FILE *io, int level, const char *file, int line, const char *fn,
 {
 	if (level <= LOGLEVEL) {
 		_vdlogf(io, file, line, fn, fmt, ap);
+	}
+}
+
+void pgr_hexdump(const void *buf, size_t len)
+{
+	if (LOGLEVEL > LOG_DEBUG) {
+		return;
+	}
+
+	char *xdig = "0123456789abcdef";
+	char hex[47+1];
+	char asc[16+1];
+	size_t x, y;
+
+	hex[47] = asc[16] = '\0';
+	for (y = 0; y < len; y += 16) {
+		memset(hex, ' ', 47);
+		memset(asc, ' ', 16);
+		for (x = 0; x < 16 && y + x < len; x++) {
+			char c = ((char*)buf)[y+x];
+			hex[x*3+0] = xdig[(c & 0xf0) >> 4];
+			hex[x*3+1] = xdig[(c & 0x0f)];
+			asc[x] = isprint(c) ? c : '.';
+		}
+		pgr_debugf("%08lo | %s | %s", y, hex, asc);
 	}
 }

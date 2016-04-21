@@ -49,6 +49,13 @@ char* pgr_backend_role(int role);
 typedef unsigned long long int lag_t;
 
 typedef struct {
+	unsigned int  hi, lo;
+	unsigned int  a, b, c, d;
+	unsigned char buf[64];
+	unsigned int  blk[16];
+} MD5;
+
+typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
 	int serial;                 /* increment on config reload.  */
 
@@ -122,6 +129,32 @@ typedef struct {
 	BACKEND *backends;          /* the backends -- epic         */
 } CONTEXT;
 
+typedef struct __param PARAM;
+struct __param {
+	char *name;
+	char *value;
+	struct __param *next;
+};
+
+typedef struct {
+	CONTEXT *context;
+
+	int index;
+	int serial;
+
+	char *hostname;
+	int port;
+
+	char *username;
+	char *database;
+	const char *pwhash;
+	char salt[4];
+
+	PARAM *params;
+
+	int fd;
+} CONNECTION;
+
 /* process control subroutines */
 void pgr_abort(int code);
 
@@ -138,12 +171,6 @@ int pgr_context(CONTEXT *c);
 const char* pgr_auth_find(CONTEXT *c, const char *username);
 
 /* hashing subroutines */
-typedef struct {
-	unsigned int  hi, lo;
-	unsigned int  a, b, c, d;
-	unsigned char buf[64];
-	unsigned int  blk[16];
-} MD5;
 void pgr_md5_init(MD5 *md5);
 void pgr_md5_update(MD5 *md5, const void *data, size_t len);
 void pgr_md5_raw(unsigned char dst[16], MD5 *md5);
@@ -155,6 +182,7 @@ void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 void pgr_dlogf(FILE *io, int level, const char *file, int line, const char *fn, const char *fmt, ...);
 void pgr_vdlogf(FILE *io, int level, const char *file, int line, const char *fn, const char *fmt, va_list ap);
+void pgr_hexdump(const void *buf, size_t len);
 #define pgr_debugf(...) pgr_dlogf(stderr, LOG_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
 
 /* network subroutines */
@@ -166,9 +194,13 @@ int pgr_sendn(int fd, const void *buf, size_t n);
 int pgr_sendf(int fd, const char *fmt, ...);
 int pgr_recvn(int fd, const void *buf, size_t n);
 
-/* backend subroutines */
-int pgr_pick_any(CONTEXT *c);
-int pgr_pick_master(CONTEXT *c);
+/* connection subroutines */
+void pgr_conn_init(CONTEXT *c, CONNECTION *dst);
+void pgr_conn_frontend(CONNECTION *dst, int fd);
+void pgr_conn_backend(CONNECTION *dst, BACKEND *b, int i);
+int pgr_conn_copy(CONNECTION *dst, CONNECTION *src);
+int pgr_conn_connect(CONNECTION *c);
+int pgr_conn_accept(CONNECTION *c);
 
 /* thread subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);

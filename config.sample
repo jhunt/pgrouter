@@ -14,6 +14,7 @@ tls {
 user  vcap
 group vcap
 pidfile /var/vcap/sys/run/pgrouter/pgrouter.pid
+authdb passwd.sample
 log INFO
 
 health {

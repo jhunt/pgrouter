@@ -7,6 +7,7 @@ bin_PROGRAMS = t/authdbtest t/authtest t/cfgtest t/md5test \
                pgrouter
 t_authdbtest_SOURCES = src/authdb.c src/log.c src/abort.c
 t_authdbtest_CFLAGS = -DPTEST
+t_authdbtest_LDADD = -lpthread
 t_authtest_SOURCES = src/authdb.c src/log.c src/abort.c src/md5.c src/init.c
 t_authtest_CFLAGS = -DATEST
 t_authtest_LDADD = -lpthread
@@ -16,7 +17,7 @@ t_md5test_SOURCES = src/md5.c
 t_md5test_CFLAGS = -DTEST
 
 pgrouter_SOURCES = src/config.c src/log.c src/init.c src/abort.c src/net.c \
-                   src/rand.c src/backend.c src/proto.c \
+                   src/rand.c src/proto.c src/md5.c src/authdb.c src/conn.c \
                    src/watcher.c src/monitor.c src/worker.c \
                    src/main.c
 pgrouter_LDADD = -lpthread -lpq

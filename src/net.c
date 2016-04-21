@@ -316,7 +316,7 @@ int pgr_sendn(int fd, const void *buf, size_t n)
 {
 	ssize_t nwrit;
 	const void *p = buf;
-	pgr_debugf("writing %d bytes to fd %d", n, fd);
+	pgr_hexdump(buf, n);
 	while (n > 0) {
 		nwrit = write(fd, p, n);
 		if (nwrit <= 0) {
@@ -326,11 +326,8 @@ int pgr_sendn(int fd, const void *buf, size_t n)
 		}
 		n -= nwrit;
 		p += nwrit;
-		pgr_debugf("wrote %d bytes to fd %d; %d bytes left",
-				nwrit, fd, n);
 	}
 
-	pgr_debugf("done writing to fd %d", fd);
 	return 0;
 }
 
@@ -363,10 +360,7 @@ int pgr_recvn(int fd, const void *buf, size_t n)
 
 		n -= nread;
 		p += nread;
-		pgr_debugf("read %d bytes from fd %d; %d bytes left",
-				nread, fd, n);
 	}
 
-	pgr_debugf("done reading from fd %d", fd);
 	return 0;
 }

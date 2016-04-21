@@ -52,6 +52,9 @@ typedef struct {
 	uint8_t type;     /* one of the PG3_MSG_* constants      */
 	uint32_t length;  /* length of message payload (data+4)  */
 	uint8_t *data;    /* the actual data, (len-4) octets     */
+
+	/* auxiliary fields, based on type */
+	int auth_code;
 } PG3_MSG;
 
 typedef struct {
@@ -67,6 +70,9 @@ int pg3_recv(int fd, PG3_MSG *msg, int typed);
 int pg3_send(int fd, PG3_MSG *msg);
 void pf3_free(PG3_MSG *msg);
 
-int pg3_error(PG3_MSG *msg, PG3_ERROR *err);
+int pg3_send_authmd5(int fd, char salt[4]);
+int pg3_send_password(int fd, const char *crypt);
+
+void pg3_error(PG3_MSG *msg, PG3_ERROR *err);
 
 #endif

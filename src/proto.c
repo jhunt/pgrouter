@@ -55,30 +55,25 @@ int pg3_recv(int fd, PG3_MSG *msg, int typed)
 	int rc;
 
 	if (typed) {
-		pgr_debugf("reading %d byte(s) to get type of message", sizeof(msg->type));
 		rc = pgr_recvn(fd, &msg->type, sizeof(msg->type));
 		if (rc != 0) {
 			return negative(rc);
 		}
 	}
-	pgr_debugf("message type is %d (%c)",
-			msg->type, isprint(msg->type) ? msg->type : '.');
 
 	rc = pgr_recvn(fd, &msg->length, sizeof(msg->length));
 	if (rc != 0) {
 		return negative(rc);
 	}
-	msg->length = ntohl(msg->length);
-	pgr_debugf("message is %d octets long", msg->length);
 
+	msg->length = ntohl(msg->length);
 	if (msg->length > 65536) {
-		pgr_debugf("message is too long; bailing");
+		pgr_debugf("message of %d (%#02x) octets is too long; bailing",
+				msg->length, msg->length);
 		return 3;
 	}
 
 	if (msg->length > sizeof(msg->length)) {
-		pgr_debugf("allocating a %d byte buffer to store message payload",
-				msg->length - sizeof(msg->length));
 		msg->data = malloc(msg->length - sizeof(msg->length));
 		if (!msg->data) {
 			return 4;
@@ -134,35 +129,48 @@ int pg3_recv(int fd, PG3_MSG *msg, int typed)
 		}
 	}
 
+	/* auxiliary data */
+	if (msg->type == 'R') {
+		msg->auth_code = ntohl(*(int*)(msg->data));
+	}
+
+	uint8_t *buf;
+	uint32_t len = htonl(msg->length);
+
+	if (typed) {
+		buf = malloc(1 + msg->length);
+		buf[0] = msg->type;
+		memcpy(buf+1, &len, 4);
+		memcpy(buf+5, msg->data, msg->length - 4);
+
+	} else {
+		buf = malloc(msg->length);
+		memcpy(buf, &len, 4);
+		memcpy(buf+4, msg->data, msg->length - 4);
+	}
+	pgr_hexdump(buf, msg->length + (typed ? 1 : 0));
+
 	return 0;
 }
 
 int pg3_send(int fd, PG3_MSG *msg)
 {
-	int rc;
-	uint32_t len;
+	uint8_t *buf;
+	uint32_t len = htonl(msg->length);
 
 	if (msg->type < 0x80) {
-		rc = pgr_sendn(fd, &msg->type, sizeof(msg->type));
-		if (rc != 0) {
-			return rc;
-		}
-	}
-	len = htonl(msg->length);
-	pgr_debugf("converted %08x (%d) length to network byte order as %08x",
-			msg->length, msg->length, len);
-	rc = pgr_sendn(fd, &len, sizeof(len));
-	if (rc != 0) {
-		return rc;
-	}
+		buf = malloc(1 + msg->length);
+		buf[0] = msg->type;
+		memcpy(buf + 1, &len, 4);
+		memcpy(buf + 5, msg->data, msg->length - 4);
+		return pgr_sendn(fd, buf, 1 + msg->length);
 
-	if (msg->length > 4) {
-		rc = pgr_sendn(fd, msg->data, msg->length - 4);
-		if (rc != 0) {
-			return rc;
-		}
+	} else {
+		buf = malloc(msg->length);
+		memcpy(buf, &len, 4);
+		memcpy(buf + 4, msg->data, msg->length - 4);
+		return pgr_sendn(fd, buf, msg->length);
 	}
-	return 0;
 }
 
 void pg3_free(PG3_MSG *msg)
@@ -171,12 +179,32 @@ void pg3_free(PG3_MSG *msg)
 	msg->data = NULL;
 }
 
-int pg3_error(PG3_MSG *msg, PG3_ERROR *err)
+int pg3_send_authmd5(int fd, char salt[4])
 {
+	/* this one is simple enough, just build the buffer */
+	int rc;
+	uint8_t buf[1 + 4 + 8];
+	memset(&buf, 0, sizeof(buf));
+	buf[0] = PG3_MSG_AUTH;
+	buf[4] = 12; /* length = 12 */
+	buf[8] = 5;  /* value 5 == md5 */
+	memcpy(buf + 9, salt, 4);
+
+	return pgr_sendn(fd, buf, sizeof(buf));
+}
+
+int pg3_send_password(int fd, const char *crypt)
+{
+}
+
+void pg3_error(PG3_MSG *msg, PG3_ERROR *err)
+{
+	msg->type = 'E';
 	msg->length = (1 /* type field */ + strlen(err->severity) + 1 /* null-terminator */)
 	            + (1 /* type field */ + strlen(err->sqlstate) + 1 /* null-terminator */)
 	            + (1 /* type field */ + strlen(err->message)  + 1 /* null-terminator */)
-	            + 4 /* length field */;
+	            + 4 /* length field */
+	            + 1 /* final null-terminator */;
 
 	if (err->details != NULL) {
 		msg->length += (1 /* type field */ + strlen(err->details)  + 1 /* null-terminator */);
@@ -187,7 +215,7 @@ int pg3_error(PG3_MSG *msg, PG3_ERROR *err)
 
 	msg->data = malloc(msg->length);
 	if (!msg->data) {
-		return -1;
+		pgr_abort(ABORT_MEMFAIL);
 	}
 
 	char *s;
@@ -202,5 +230,5 @@ int pg3_error(PG3_MSG *msg, PG3_ERROR *err)
 	if (err->hint != NULL) {
 		*p++ = 'H'; for (s = err->hint; *s; *p++ = *s++) ; *p++ = '\0';
 	}
-	return 0;
+	*p = '\0';
 }
