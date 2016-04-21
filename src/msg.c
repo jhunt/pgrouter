@@ -18,14 +18,7 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 	if (rc != 0) {
 		return negative(rc);
 	}
-	if (m->type > 0) {
-		/* this is a typed message, so we need to grab length */
-		rc = pgr_recvn(fd, &m->length, sizeof(m->length));
-		if (rc != 0) {
-			return negative(rc);
-		}
-
-	} else {
+	if (isuntyped(m->type)) {
 		/* legacy 'untyped' message; first 4 octets are length */
 		char size[4] = { m->type, 0, 0, 0 };
 		rc = pgr_recvn(fd, size+1, 3);
@@ -33,6 +26,12 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 			return negative(rc);
 		}
 		memcpy(&m->length, size, 4);
+
+	} else {
+		rc = pgr_recvn(fd, &m->length, 4);
+		if (rc != 0) {
+			return negative(rc);
+		}
 	}
 
 	m->length = ntohl(m->length);
@@ -55,16 +54,16 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 		}
 	}
 
-	if (!m->type == 0) {
+	if (isuntyped(m->type)) {
 		pgr_debugf("determing type from message length (%d) and payload characteristics",
 				m->length);
 
 		if (m->length >= 8) {
-			int hi16 = (m->data[0] << 8) | m->data[1];
-			int lo16 = (m->data[2] << 8) | m->data[3];
+			unsigned short hi16 = (m->data[0] << 8) | m->data[1];
+			unsigned short lo16 = (m->data[2] << 8) | m->data[3];
 			const char *type;
 
-			pgr_debugf("length %d and payload %02x %02x (%d) %02x %02x (%d)",
+			pgr_debugf("length %d and payload %02x %02x (%u) %02x %02x (%u)",
 					m->length,
 					m->data[0], m->data[1], hi16,
 					m->data[2], m->data[3], lo16);
@@ -101,23 +100,42 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 	/* auxiliary data */
 	if (m->type == 'R') {
 		m->auth.code = ntohl(*(int*)(m->data));
+
+	} else if (m->type == 'E') {
+		char **sub, *x;
+		for (sub = NULL, x = m->data; x && *x; ) {
+			switch (*x) {
+			case 'S': sub = &m->error.severity; break;
+			case 'C': sub = &m->error.sqlstate; break;
+			case 'M': sub = &m->error.message;  break;
+			case 'D': sub = &m->error.details;  break;
+			case 'H': sub = &m->error.hint;     break;
+			default:  sub = NULL; break;
+			}
+
+			x++;
+			if (sub) {
+				*sub = x;
+			}
+			x += strlen(x) + 1;
+		}
 	}
 
 	char *buf;
 	int len = htonl(m->length);
 
-	if (m->type > 0) {
+	if (isuntyped(m->type)) {
+		buf = malloc(m->length);
+		memcpy(buf, &len, 4);
+		memcpy(buf+4, m->data, m->length - 4);
+
+	} else {
 		buf = malloc(1 + m->length);
 		buf[0] = m->type;
 		memcpy(buf+1, &len, 4);
 		memcpy(buf+5, m->data, m->length - 4);
-
-	} else {
-		buf = malloc(m->length);
-		memcpy(buf, &len, 4);
-		memcpy(buf+4, m->data, m->length - 4);
 	}
-	pgr_hexdump(buf, m->length + (m->type > 0 ? 1 : 0));
+	pgr_hexdump(buf, m->length + (isuntyped(m->type) ? 0 : 1));
 
 	return 0;
 }
@@ -127,18 +145,18 @@ int pgr_msg_send(int fd, MESSAGE *m)
 	char *buf;
 	int len = htonl(m->length);
 
-	if (m->type > 0) {
+	if (isuntyped(m->type)) {
+		buf = malloc(m->length);
+		memcpy(buf, &len, 4);
+		memcpy(buf + 4, m->data, m->length - 4);
+		return pgr_sendn(fd, buf, m->length);
+
+	} else {
 		buf = malloc(1 + m->length);
 		buf[0] = m->type;
 		memcpy(buf + 1, &len, 4);
 		memcpy(buf + 5, m->data, m->length - 4);
 		return pgr_sendn(fd, buf, 1 + m->length);
-
-	} else {
-		buf = malloc(m->length);
-		memcpy(buf, &len, 4);
-		memcpy(buf + 4, m->data, m->length - 4);
-		return pgr_sendn(fd, buf, m->length);
 	}
 }
 

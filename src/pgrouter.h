@@ -42,6 +42,7 @@ char* pgr_backend_role(int role);
 #define MSG_STARTUP_MESSAGE 1
 #define MSG_SSL_REQUEST     2
 #define MSG_CANCEL_REQUEST  3
+#define isuntyped(x) ((x) < 4)
 
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
@@ -61,9 +62,9 @@ typedef struct {
 } MD5;
 
 typedef struct {
-	char type;     /* one of the MSG_* constants          */
-	int length;    /* length of message payload (data+4)  */
-	char *data;    /* the actual data, (len-4) octets     */
+	unsigned char type;   /* one of the MSG_* constants          */
+	int length;           /* length of message payload (data+4)  */
+	unsigned char *data;  /* the actual data, (len-4) octets     */
 
 	/* auxiliary fields, based on type */
 	struct {
