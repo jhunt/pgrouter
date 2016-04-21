@@ -397,7 +397,7 @@ int pgr_conn_accept(CONNECTION *c)
 			return 0;
 
 		default:
-			pgr_debugf("invalid '%c' message received from frontend; disconnecting");
+			pgr_debugf("invalid '%c' message received from frontend; disconnecting", msg.type);
 			return -1;
 		}
 	}
