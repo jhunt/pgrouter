@@ -95,6 +95,7 @@ static void handle_client(CONTEXT *c, int fd)
 		goto shutdown;
 	}
 
+	int befd = reader.fd;
 	for (;;) {
 		do {
 			pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
@@ -103,8 +104,8 @@ static void handle_client(CONTEXT *c, int fd)
 				goto shutdown;
 			}
 
-			pgr_debugf("relaying message from frontend (fd %d) to reader (fd %d)",
-					frontend.fd, reader.fd);
+			pgr_debugf("relaying message from frontend (fd %d) to %s (fd %d)",
+					frontend.fd, befd == reader.fd ? "reader" : "writer", befd);
 			rc = pgr_msg_send(reader.fd, &msg);
 			if (rc != 0) {
 				goto shutdown;
@@ -112,14 +113,15 @@ static void handle_client(CONTEXT *c, int fd)
 		} while (msg.type != 'Q' && msg.type != 'S');
 
 		do {
-			pgr_debugf("receiving message from reader (fd %d)", reader.fd);
+			pgr_debugf("receiving message from %s (fd %d)",
+					befd == reader.fd ? "reader" : "writer", befd);
 			rc = pgr_msg_recv(reader.fd, &msg);
 			if (rc != 0) {
 				goto shutdown;
 			}
 
-			pgr_debugf("relaying message from reader (fd %d) to frontend (fd %d)",
-					reader.fd, frontend.fd);
+			pgr_debugf("relaying message from %s (fd %d) to frontend (fd %d)",
+					befd == reader.fd ? "reader" : "writer", befd, frontend.fd);
 			rc = pgr_msg_send(frontend.fd, &msg);
 			if (rc != 0) {
 				goto shutdown;
@@ -127,7 +129,7 @@ static void handle_client(CONTEXT *c, int fd)
 		} while (msg.type != 'Z');
 	}
 shutdown:
-	pgr_debugf("closing all frontend and backend connection");
+	pgr_debugf("closing all frontend and backend connections");
 	close(reader.fd);
 	close(writer.fd);
 	close(frontend.fd);
