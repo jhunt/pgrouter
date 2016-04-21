@@ -1,14 +1,13 @@
 #include "pgrouter.h"
-#include "proto.h"
 #include <stdlib.h>
 #include <string.h>
 
-static int startup_message(PG3_MSG *msg, CONNECTION *c)
+static int startup_message(MESSAGE *msg, CONNECTION *c)
 {
 	PARAM *p;
 	int off, n;
 
-	msg->type = PG3_MSG_STARTUP;
+	msg->type = MSG_STARTUP_MESSAGE;
 	msg->length = 4 + 4 + 1;
 	for (p = c->params; p; p = p->next) {
 		msg->length += strlen(p->name)  + 1
@@ -35,7 +34,7 @@ static int startup_message(PG3_MSG *msg, CONNECTION *c)
 	return 0;
 }
 
-static int auth_md5_message(PG3_MSG *msg, CONNECTION *c)
+static int auth_md5_message(MESSAGE *msg, CONNECTION *c)
 {
 	msg->type = 'R';
 	msg->length = 12;
@@ -45,7 +44,7 @@ static int auth_md5_message(PG3_MSG *msg, CONNECTION *c)
 	return 0;
 }
 
-static int auth_ok_message(PG3_MSG *msg, CONNECTION *c)
+static int auth_ok_message(MESSAGE *msg, CONNECTION *c)
 {
 	msg->type = 'R';
 	msg->length = 8;
@@ -54,7 +53,7 @@ static int auth_ok_message(PG3_MSG *msg, CONNECTION *c)
 	return 0;
 }
 
-static int password_message(PG3_MSG *msg, CONNECTION *c)
+static int password_message(MESSAGE *msg, CONNECTION *c)
 {
 	int rc, n;
 	MD5 md5;
@@ -73,7 +72,7 @@ static int password_message(PG3_MSG *msg, CONNECTION *c)
 	return 0;
 }
 
-static int ready_for_query(PG3_MSG *msg, CONNECTION *c)
+static int ready_for_query(MESSAGE *msg, CONNECTION *c)
 {
 	msg->type = 'Z';
 	msg->length = 5;
@@ -101,7 +100,7 @@ static PARAM* copy_params(PARAM *src)
 	return dst;
 }
 
-static int extract_params(CONNECTION *c, PG3_MSG *msg)
+static int extract_params(CONNECTION *c, MESSAGE *msg)
 {
 	PARAM **p;
 	char *x;
@@ -152,7 +151,7 @@ static int extract_params(CONNECTION *c, PG3_MSG *msg)
 	return 0;
 }
 
-static int check_auth(CONNECTION *c, PG3_MSG *msg)
+static int check_auth(CONNECTION *c, MESSAGE *msg)
 {
 	if (c->pwhash == NULL) {
 		return 1;
@@ -230,7 +229,7 @@ int pgr_conn_copy(CONNECTION *dst, CONNECTION *src)
 int pgr_conn_connect(CONNECTION *c)
 {
 	int rc;
-	PG3_MSG msg;
+	MESSAGE msg;
 
 	c->fd = pgr_connect(c->hostname, c->port, 20); /* FIXME: timeout. for realz. */
 	if (c->fd < 0) {
@@ -243,7 +242,7 @@ int pgr_conn_connect(CONNECTION *c)
 	if (rc != 0) {
 		return rc;
 	}
-	rc = pg3_send(c->fd, &msg);
+	rc = pgr_msg_send(c->fd, &msg);
 	if (rc != 0) {
 		return rc;
 	}
@@ -251,7 +250,7 @@ int pgr_conn_connect(CONNECTION *c)
 	/* process replies from remote */
 	for (;;) {
 			pgr_debugf("waiting for message from backend (fd %d)", c->fd);
-		rc = pg3_recv(c->fd, &msg, 1);
+		rc = pgr_msg_recv(c->fd, &msg);
 		if (rc != 0) {
 			return rc;
 		}
@@ -266,7 +265,7 @@ int pgr_conn_connect(CONNECTION *c)
 			break;
 
 		case 'R': /* Authentication */
-			switch (msg.auth_code) {
+			switch (msg.auth.code) {
 			case 0:                                /* AuthenticationOK */
 				break;
 
@@ -277,7 +276,7 @@ int pgr_conn_connect(CONNECTION *c)
 				if (rc != 0) {
 					return rc;
 				}
-				rc = pg3_send(c->fd, &msg);
+				rc = pgr_msg_send(c->fd, &msg);
 				if (rc != 0) {
 					return rc;
 				}
@@ -309,22 +308,20 @@ int pgr_conn_connect(CONNECTION *c)
 
 int pgr_conn_accept(CONNECTION *c)
 {
-	int rc, typed;
-	PG3_MSG msg;
-	PG3_ERROR err;
-	memset(&err, 0, sizeof(err));
+	int rc;
+	MESSAGE msg;
+	memset(&msg, 0, sizeof(msg));
 
 	/* receive all messages from client */
-	typed = 0;
 	for (;;) {
 		pgr_debugf("awaiting message from connection %p (fd %d)", c, c->fd);
-		rc = pg3_recv(c->fd, &msg, typed);
+		rc = pgr_msg_recv(c->fd, &msg);
 		if (rc != 0) {
 			return rc;
 		}
 
 		switch (msg.type) {
-		case PG3_MSG_SSL_REQUEST:
+		case MSG_SSL_REQUEST:
 			/* FIXME: SSL not supported in this iteration */
 			pgr_debugf("received SSLRequest; replying with 'N' (not supported)");
 			if (write(c->fd, "N", 1) != 1) {
@@ -332,7 +329,7 @@ int pgr_conn_accept(CONNECTION *c)
 			}
 			break;
 
-		case PG3_MSG_STARTUP:
+		case MSG_STARTUP_MESSAGE:
 			pgr_debugf("extracting parameters from StartupMessage");
 			rc = extract_params(c, &msg);
 			if (rc != 0) {
@@ -343,30 +340,32 @@ int pgr_conn_accept(CONNECTION *c)
 			if (rc != 0) {
 				return rc;
 			}
-			rc = pg3_send(c->fd, &msg);
+			rc = pgr_msg_send(c->fd, &msg);
 			if (rc != 0) {
 				return rc;
 			}
-			typed = 1;
 			break;
 
 		case 'p': /* PasswordMessage */
 			pgr_debugf("received PasswordMessage");
 			rc = check_auth(c, &msg);
 			if (rc != 0) {
-				err.severity = "ERROR";
-				err.sqlstate = "28P01";
-				asprintf(&err.message, "password authentication failed for user \"%s\"",
+				pgr_msg_clear(&msg);
+				msg.type = 'E';
+				msg.error.severity = "ERROR";
+				msg.error.sqlstate = "28P01";
+				asprintf(&msg.error.message, "password authentication failed for user \"%s\"",
 						c->username);
-				pg3_error(&msg, &err);
 
 				pgr_debugf("authentication failed; sending ErrorResponse %s %s",
-						err.severity, err.sqlstate);
-				rc = pg3_send(c->fd, &msg);
+						msg.error.severity, msg.error.sqlstate);
+				pgr_msg_pack(&msg);
+				rc = pgr_msg_send(c->fd, &msg);
 				if (rc != 0) {
 					pgr_logf(stderr, LOG_ERR, "failed to send ErrorResponse to frontend (in response to md5 authentication failure)");
 				}
-				free(err.message);
+				free(msg.error.message);
+				msg.error.message = "(invalid error message)";
 				return 1;
 			}
 
@@ -375,7 +374,7 @@ int pgr_conn_accept(CONNECTION *c)
 			if (rc != 0) {
 				return rc;
 			}
-			rc = pg3_send(c->fd, &msg);
+			rc = pgr_msg_send(c->fd, &msg);
 			if (rc != 0) {
 				return rc;
 			}
@@ -386,7 +385,7 @@ int pgr_conn_accept(CONNECTION *c)
 			if (rc != 0) {
 				return rc;
 			}
-			rc = pg3_send(c->fd, &msg);
+			rc = pgr_msg_send(c->fd, &msg);
 			if (rc != 0) {
 				return rc;
 			}

@@ -17,7 +17,7 @@ t_md5test_SOURCES = src/md5.c
 t_md5test_CFLAGS = -DTEST
 
 pgrouter_SOURCES = src/config.c src/log.c src/init.c src/abort.c src/net.c \
-                   src/rand.c src/proto.c src/md5.c src/authdb.c src/conn.c \
+                   src/rand.c src/msg.c src/md5.c src/authdb.c src/conn.c \
                    src/watcher.c src/monitor.c src/worker.c \
                    src/main.c
 pgrouter_LDADD = -lpthread -lpq

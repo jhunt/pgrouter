@@ -38,6 +38,11 @@ char* pgr_backend_role(int role);
 #define ABORT_UNIMPL   7
 #define ABORT_ABSURD   8
 
+/* Message types */
+#define MSG_STARTUP_MESSAGE 1
+#define MSG_SSL_REQUEST     2
+#define MSG_CANCEL_REQUEST  3
+
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
 #define DEFAULT_FRONTEND_BIND "*:5432"
@@ -54,6 +59,25 @@ typedef struct {
 	unsigned char buf[64];
 	unsigned int  blk[16];
 } MD5;
+
+typedef struct {
+	char type;     /* one of the MSG_* constants          */
+	int length;    /* length of message payload (data+4)  */
+	char *data;    /* the actual data, (len-4) octets     */
+
+	/* auxiliary fields, based on type */
+	struct {
+		int code;
+	} auth;
+
+	struct {
+		char *severity;   /* */
+		char *sqlstate;   /* */
+		char *message;    /* */
+		char *details;    /* */
+		char *hint;       /* */
+	} error;
+} MESSAGE;
 
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
@@ -201,6 +225,13 @@ void pgr_conn_backend(CONNECTION *dst, BACKEND *b, int i);
 int pgr_conn_copy(CONNECTION *dst, CONNECTION *src);
 int pgr_conn_connect(CONNECTION *c);
 int pgr_conn_accept(CONNECTION *c);
+
+/* message (protocol) subroutines */
+/* FIXME: need timeout variation of pgr_msg_recv */
+int pgr_msg_recv(int fd, MESSAGE *m);
+int pgr_msg_send(int fd, MESSAGE *m);
+void pgr_msg_pack(MESSAGE *m);
+void pgr_msg_clear(MESSAGE *m);
 
 /* thread subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);

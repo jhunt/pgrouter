@@ -1,5 +1,4 @@
 #include "pgrouter.h"
-#include "proto.h"
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -9,32 +8,6 @@
 #include "locks.inc.c"
 
 #define max(a,b) ((a) > (b) ? (a) : (b))
-
-#define  FSM_READY          5
-#define  FSM_QUERY_SENT     6
-#define  FSM_PARSE_SENT     7
-#define  FSM_BIND_READY     8
-#define  FSM_BIND_SENT      9
-#define  FSM_EXEC_READY     10
-#define  FSM_EXEC_SENT      11
-#define  FSM_WAIT_SYNC      12
-#define  FSM_SYNC_SENT      13
-
-static char* fsm_name(int n)
-{
-	switch (n) {
-	case FSM_READY:         return "READY";
-	case FSM_QUERY_SENT:    return "QUERY_SENT";
-	case FSM_PARSE_SENT:    return "PARSE_SENT";
-	case FSM_BIND_READY:    return "BIND_READY";
-	case FSM_BIND_SENT:     return "BIND_SENT";
-	case FSM_EXEC_READY:    return "EXEC_READY";
-	case FSM_EXEC_SENT:     return "EXEC_SENT";
-	case FSM_WAIT_SYNC:     return "WAIT_SYNC";
-	case FSM_SYNC_SENT:     return "SYNC_SENT";
-	default:                return "(unknow)";
-	}
-}
 
 static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer)
 {
@@ -103,7 +76,7 @@ static void handle_client(CONTEXT *c, int fd)
 {
 	int rc, i, state;
 	CONNECTION frontend, reader, writer;
-	PG3_MSG msg;
+	MESSAGE msg;
 
 	pgr_conn_init(c, &frontend);
 	pgr_conn_init(c, &reader);
@@ -120,53 +93,36 @@ static void handle_client(CONTEXT *c, int fd)
 		goto shutdown;
 	}
 
-	state = FSM_READY;
 	for (;;) {
-		pgr_debugf("FSM[%s]", fsm_name(state));
-		switch (state) {
-		case FSM_READY:
-			do {
-				pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
-				rc = pg3_recv(frontend.fd, &msg, 1);
-				if (rc != 0) {
-					goto shutdown;
-				}
+		do {
+			pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
+			rc = pgr_msg_recv(frontend.fd, &msg);
+			if (rc != 0) {
+				goto shutdown;
+			}
 
-				pgr_debugf("relaying message from frontend (fd %d) to reader (fd %d)",
-						frontend.fd, reader.fd);
-				rc = pg3_send(reader.fd, &msg);
-				if (rc != 0) {
-					goto shutdown;
-				}
-			} while (msg.type != 'Q' && msg.type != 'S');
+			pgr_debugf("relaying message from frontend (fd %d) to reader (fd %d)",
+					frontend.fd, reader.fd);
+			rc = pgr_msg_send(reader.fd, &msg);
+			if (rc != 0) {
+				goto shutdown;
+			}
+		} while (msg.type != 'Q' && msg.type != 'S');
 
-			do {
-				pgr_debugf("receiving message from reader (fd %d)", reader.fd);
-				rc = pg3_recv(reader.fd, &msg, 1);
-				if (rc != 0) {
-					goto shutdown;
-				}
+		do {
+			pgr_debugf("receiving message from reader (fd %d)", reader.fd);
+			rc = pgr_msg_recv(reader.fd, &msg);
+			if (rc != 0) {
+				goto shutdown;
+			}
 
-				pgr_debugf("relaying message from reader (fd %d) to frontend (fd %d)",
-						reader.fd, frontend.fd);
-				rc = pg3_send(frontend.fd, &msg);
-				if (rc != 0) {
-					goto shutdown;
-				}
-			} while (msg.type != 'Z');
-			break;
-
-		case FSM_QUERY_SENT:
-		case FSM_PARSE_SENT:
-		case FSM_BIND_READY:
-		case FSM_BIND_SENT:
-		case FSM_EXEC_READY:
-		case FSM_EXEC_SENT:
-		case FSM_WAIT_SYNC:
-		case FSM_SYNC_SENT:
-			break;
-		}
-
+			pgr_debugf("relaying message from reader (fd %d) to frontend (fd %d)",
+					reader.fd, frontend.fd);
+			rc = pgr_msg_send(frontend.fd, &msg);
+			if (rc != 0) {
+				goto shutdown;
+			}
+		} while (msg.type != 'Z');
 	}
 shutdown:
 	pgr_debugf("closing all frontend and backend connection");
