@@ -441,7 +441,7 @@ static int parse_top(PARSER *p)
 	case T_QSTRING:
 		user = as_string(&t1);
 		if (!user) {
-			/* FIXME: handle the error! */
+			pgr_abort(ABORT_ABSURD);
 		}
 
 		t2 = emit(p->l);
@@ -454,7 +454,7 @@ static int parse_top(PARSER *p)
 		case T_WORD:
 			type = as_string(&t2);
 			if (!type) {
-				/* FIXME: handle the error! */
+				pgr_abort(ABORT_ABSURD);
 			}
 			if (strcmp(type, "md5") != 0) {
 				p->f = NULL;
@@ -471,7 +471,7 @@ static int parse_top(PARSER *p)
 			case T_QSTRING:
 				hash = as_string(&t3);
 				if (!hash) {
-					/* FIXME: handle the error! */
+					pgr_abort(ABORT_ABSURD);
 				}
 
 				new_entry(p, user, hash);

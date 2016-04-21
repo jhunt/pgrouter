@@ -288,7 +288,7 @@ int pgr_conn_connect(CONNECTION *c)
 				break;
 
 			default:                           /* all other auth types */
-				/* FIXME: error on unsupported auth request! */
+				pgr_logf(stderr, LOG_ERR, "unsupported authentication type %d", msg.auth.code);
 				return -1;
 			}
 			break;
