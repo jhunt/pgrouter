@@ -31,6 +31,7 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 			writer->index    = i;
 			writer->hostname = strdup(c->backends[i].hostname);
 			writer->port     = c->backends[i].port;
+			writer->timeout  = c->health.timeout * 1000;
 
 		} else if (c->backends[i].status == BACKEND_IS_OK &&
 		           c->backends[i].health.lag < c->backends[i].health.threshold) {
@@ -58,6 +59,7 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 			reader->index    = i;
 			reader->hostname = strdup(c->backends[i].hostname);
 			reader->port     = c->backends[i].port;
+			reader->timeout  = c->health.timeout * 1000;
 
 			pgr_logf(stderr, LOG_INFO, "[worker] using backend %d, %s:%d (serial %d)",
 					reader->index, reader->hostname, reader->port, reader->serial);

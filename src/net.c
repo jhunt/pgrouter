@@ -1,10 +1,12 @@
 #include "pgrouter.h"
 #include <stdlib.h>
+#include <unistd.h>
 #include <string.h>
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <fcntl.h>
 
 static int negative(int x)
 {
@@ -223,50 +225,6 @@ int pgr_listen6(const char *ep, int backlog)
 
 	pgr_debugf("binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
-}
-
-int pgr_connect_ep(const char *ep, int timeout_ms)
-{
-	/* FIXME: honor timeout */
-	int rc, fd, type;
-	struct sockaddr_in ipv4;
-	struct sockaddr_in6 ipv6;
-	memset(&ipv4, 0, sizeof(ipv4));
-	memset(&ipv6, 0, sizeof(ipv6));
-
-	rc = ipv4_endpoint(&ipv4, ep);
-	if (rc == 0) {
-		fd = socket(ipv4.sin_family, SOCK_STREAM, 0);
-		type = 4;
-	} else {
-		rc = ipv6_endpoint(&ipv6, ep);
-		if (rc != 0) {
-			return -1;
-		}
-		fd = socket(ipv6.sin6_family, SOCK_STREAM, 0);
-		type = 6;
-	}
-	if (fd < 0) {
-		pgr_logf(stderr, LOG_ERR, "failed to create an ipv%d socket for [%s]: %s (errno %d)",
-				type, ep, strerror(errno), errno);
-		return -1;
-	}
-
-	switch (type) {
-	case 4: rc = connect(fd, (struct sockaddr*)(&ipv4), sizeof(ipv4)); break;
-	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
-	default:
-		pgr_logf(stderr, LOG_ERR, "unrecognized IP version %d", type);
-		close(fd);
-		return -1;
-	}
-	if (rc != 0) {
-		pgr_logf(stderr, LOG_ERR, "failed to connect (ipv%d) to %s: %s (errno %d)",
-				type, ep, strerror(errno), errno);
-		close(fd);
-		return negative(rc);
-	}
-	return fd;
 }
 
 int pgr_connect(const char *host, int port, int timeout_ms)

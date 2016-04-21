@@ -231,7 +231,7 @@ int pgr_conn_connect(CONNECTION *c)
 	int rc;
 	MESSAGE msg;
 
-	c->fd = pgr_connect(c->hostname, c->port, 20); /* FIXME: timeout. for realz. */
+	c->fd = pgr_connect(c->hostname, c->port, c->timeout * 1000);
 	if (c->fd < 0) {
 		return c->fd;
 	}
