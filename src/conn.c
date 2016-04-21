@@ -266,7 +266,6 @@ int pgr_conn_connect(CONNECTION *c)
 			pgr_logf(stderr, LOG_INFO, "got a notice from %s:%d: %s %s %s",
 					c->hostname, c->port, msg.error.severity, msg.error.sqlstate,
 					msg.error.message);
-			/* FIXME: do something with the notice */
 			break;
 
 		case 'R': /* Authentication */
