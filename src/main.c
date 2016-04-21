@@ -186,11 +186,7 @@ int main(int argc, char **argv)
 		case SIGHUP:
 			pgr_logf(stderr, LOG_INFO, "[super] caught SIGHUP (%d)", sig);
 
-			rc = wrlock(&c.lock, "context", 0);
-			if (rc != 0) {
-				pgr_logf(stderr, LOG_ERR, "[super] RELOAD FAILED");
-				break;
-			}
+			wrlock(&c.lock, "context", 0);
 			rc = pgr_configure(&c, config, 1);
 			if (rc != 0) {
 				pgr_logf(stderr, LOG_ERR, "[super] RELOAD FAILED");

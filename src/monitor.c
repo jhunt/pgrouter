@@ -17,10 +17,7 @@ static void handle_client(CONTEXT *c, int connfd)
 {
 	int rc, i;
 
-	rc = rdlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return;
-	}
+	rdlock(&c->lock, "context", 0);
 
 	pgr_sendf(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
 	pgr_sendf(connfd, "workers %d\n", c->workers);
@@ -28,10 +25,7 @@ static void handle_client(CONTEXT *c, int connfd)
 	pgr_sendf(connfd, "connections ??\n"); /* FIXME: get real data */
 
 	for (i = 0; i < c->num_backends; i++) {
-		rc = rdlock(&c->backends[i].lock, "backend", i);
-		if (rc != 0) {
-			return;
-		}
+		rdlock(&c->backends[i].lock, "backend", i);
 
 		switch (c->backends[i].status) {
 		case BACKEND_IS_OK:
@@ -51,16 +45,10 @@ static void handle_client(CONTEXT *c, int connfd)
 			break;
 		}
 
-		rc = unlock(&c->backends[i].lock, "backend", i);
-		if (rc != 0) {
-			return;
-		}
+		unlock(&c->backends[i].lock, "backend", i);
 	}
 
-	rc = unlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return;
-	}
+	unlock(&c->lock, "context", 0);
 }
 
 static void* do_monitor(void *_c)

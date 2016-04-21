@@ -42,10 +42,7 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	int *weights;
 	int cumulative;
 
-	rc = rdlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return rc;
-	}
+	rdlock(&c->lock, "context", 0);
 
 	cumulative = 0;
 	weights = calloc(c->num_backends, sizeof(int));
@@ -54,11 +51,7 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	}
 
 	for (i = 0; i < c->num_backends; i++) {
-		rc = rdlock(&c->backends[i].lock, "backend", i);
-		if (rc != 0) {
-			unlock(&c->lock, "context", 0);
-			return rc;
-		}
+		rdlock(&c->backends[i].lock, "backend", i);
 
 		if (c->backends[i].role == BACKEND_ROLE_MASTER) {
 			writer->serial   = c->backends[i].serial;
@@ -72,11 +65,7 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 			weights[i] = cumulative;
 		}
 
-		rc = unlock(&c->backends[i].lock, "backend", i);
-		if (rc != 0) {
-			unlock(&c->lock, "context", 0);
-			return rc;
-		}
+		unlock(&c->backends[i].lock, "backend", i);
 	}
 
 	if (cumulative == 0) {
@@ -90,38 +79,24 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	for (i = 0; i < c->num_backends; i++) {
 		pgr_debugf("checking backend %d (cumulative weight %d) against %d", i, weights[i], r);
 		if (r <= weights[i]) {
-			rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				return -1;
-			}
+			rdlock(&c->backends[i].lock, "backend", i);
 
 			reader->serial   = c->backends[i].serial;
 			reader->index    = i;
 			reader->hostname = strdup(c->backends[i].hostname);
 			reader->port     = c->backends[i].port;
-			r = -1; /* found it */
 
 			pgr_logf(stderr, LOG_INFO, "[worker] using backend %d, %s:%d (serial %d)",
 					reader->index, reader->hostname, reader->port, reader->serial);
 
-			rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				return -1;
-			}
-
-			rc = unlock(&c->lock, "context", 0);
-			return rc;
+			unlock(&c->backends[i].lock, "backend", i);
+			unlock(&c->lock, "context", 0);
+			return 0;
 		}
 	}
 
-	rc = unlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return rc;
-	}
-
-	return r == -1 ? -1 : 0;
+	unlock(&c->lock, "context", 0);
+	return -1;
 }
 
 static void handle_client(CONTEXT *c, int fd)
@@ -232,25 +207,16 @@ static void* do_worker(void *_c)
 		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
 			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
 				connfd = accept(watch[i], NULL, NULL);
-				rc = wrlock(&c->lock, "context", 0);
-				if (rc != 0) {
-					pgr_logf(stderr, LOG_ERR, "[worker] unable to lock context; client connections stats *will* be incorrect");
-					handle_client(c, connfd);
+				wrlock(&c->lock, "context", 0);
+				c->fe_conns++;
+				unlock(&c->lock, "context", 0);
 
-				} else {
-					c->fe_conns++;
-					unlock(&c->lock, "context", 0);
-					handle_client(c, connfd);
+				handle_client(c, connfd);
 
-					rc = wrlock(&c->lock, "context", 0);
-					if (rc != 0) {
-						pgr_logf(stderr, LOG_ERR, "[worker] unable to lock context; client connections stats *will* be incorrect");
-					} else {
-						c->fe_conns--;
-						unlock(&c->lock, "context", 0);
-					}
+				wrlock(&c->lock, "context", 0);
+				c->fe_conns--;
+				unlock(&c->lock, "context", 0);
 
-				}
 				close(connfd);
 			}
 		}

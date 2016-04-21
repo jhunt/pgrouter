@@ -586,10 +586,7 @@ const char* pgr_auth_find(CONTEXT *c, const char *username)
 	int rc, i;
 	const char *md5;
 
-	rc = rdlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return NULL;
-	}
+	rdlock(&c->lock, "context", 0);
 
 	md5 = NULL;
 	for (i = 0; i < c->authdb.num_entries; i++) {
@@ -599,10 +596,7 @@ const char* pgr_auth_find(CONTEXT *c, const char *username)
 		}
 	}
 
-	rc = unlock(&c->lock, "context", 0);
-	if (rc != 0) {
-		return NULL;
-	}
+	unlock(&c->lock, "context", 0);
 	return md5;
 }
 

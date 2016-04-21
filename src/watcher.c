@@ -72,10 +72,7 @@ static void* do_watcher(void *_c)
 	int rc;
 
 	for (;;) {
-		rc = rdlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			pgr_abort(ABORT_LOCK);
-		}
+		rdlock(&c->lock, "context", 0);
 
 		/* if we added or removed backends as part of a configuration
 		   reload, we need to reallocate the cached health information. */
@@ -99,11 +96,7 @@ static void* do_watcher(void *_c)
 		   we need to while we have their respective read locks. */
 		int i;
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			rc = rdlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				pgr_abort(ABORT_LOCK);
-			}
+			rdlock(&c->backends[i].lock, "backend", i);
 
 			if (c->backends[i].serial != BACKENDS[i].serial) {
 				pgr_debugf("backend/%d cached serial %d != actual serial %d; updating cache entry",
@@ -163,16 +156,9 @@ static void* do_watcher(void *_c)
 				BACKENDS[i].role = c->backends[i].role;
 			}
 
-			rc = unlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				pgr_abort(ABORT_LOCK);
-			}
+			unlock(&c->backends[i].lock, "backend", i);
 		}
-		rc = unlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			pgr_abort(ABORT_LOCK);
-		}
+		unlock(&c->lock, "context", 0);
 
 		/* now, loop over the backends and gather our health data */
 		int master_pos;
@@ -306,10 +292,7 @@ static void* do_watcher(void *_c)
 		}
 
 		/* now, loop over the backends and update them with our findings */
-		rc = wrlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			pgr_abort(ABORT_LOCK);
-		}
+		wrlock(&c->lock, "context", 0);
 
 		/* if num_backends changed, we may have serviced a configuration reload
 		   in another thread while we were connectint to backends in the previous
@@ -326,11 +309,7 @@ static void* do_watcher(void *_c)
 
 		c->ok_backends = 0;
 		for (i = 0; i < NUM_BACKENDS; i++) {
-			rc = wrlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				pgr_abort(ABORT_LOCK);
-			}
+			wrlock(&c->backends[i].lock, "backend", i);
 
 			/* we have to check serial again, in case we serviced a less invasive
 			   configuration reload (in which case we may have changed ports,
@@ -341,12 +320,7 @@ static void* do_watcher(void *_c)
 				pgr_logf(stderr, LOG_ERR, "[watcher] skipping backend/%d updates for now "
 						"(hopefully things will have settled down on the next iteration)");
 
-				rc = unlock(&c->backends[i].lock, "backend", i);
-				if (rc != 0) {
-					unlock(&c->lock, "context", 0);
-					pgr_abort(ABORT_LOCK);
-				}
-
+				unlock(&c->backends[i].lock, "backend", i);
 				continue;
 			}
 
@@ -361,11 +335,7 @@ static void* do_watcher(void *_c)
 					i, c->backends[i].status, pgr_backend_status(c->backends[i].status),
 					c->backends[i].health.lag, BACKENDS[i].pos, master_pos);
 
-			rc = unlock(&c->backends[i].lock, "backend", i);
-			if (rc != 0) {
-				unlock(&c->lock, "context", 0);
-				pgr_abort(ABORT_LOCK);
-			}
+			unlock(&c->backends[i].lock, "backend", i);
 		}
 
 		/* save this for later; we look it up every time because it could
@@ -373,10 +343,7 @@ static void* do_watcher(void *_c)
 		   were awake. */
 		sleep_for = c->health.interval;
 
-		rc = unlock(&c->lock, "context", 0);
-		if (rc != 0) {
-			pgr_abort(ABORT_LOCK);
-		}
+		unlock(&c->lock, "context", 0);
 
 		pgr_debugf("sleeping for %d seconds", sleep_for);
 		sleep(sleep_for);
