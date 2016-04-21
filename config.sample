@@ -36,9 +36,9 @@ backend default {
   lag 200
   weight 100
 }
-backend 10.244.232.2:5432 { }
-backend 10.244.232.3:5432 { }
-backend 10.244.232.4:5432 { }
+backend 10.244.232.2:6432 { }
+backend 10.244.232.3:6432 { }
+backend 10.244.232.4:6432 { }
 #backend 10.0.0.5:6432 { lag 800; }
 #backend 10.0.0.6:6432 { }
 
