@@ -22,7 +22,6 @@ static void handle_client(CONTEXT *c, int connfd)
 	pgr_sendf(connfd, "backends %d/%d\n", c->ok_backends, c->num_backends);
 	pgr_sendf(connfd, "workers %d\n", c->workers);
 	pgr_sendf(connfd, "clients %d\n", c->fe_conns);
-	pgr_sendf(connfd, "connections ??\n"); /* FIXME: get real data */
 
 	for (i = 0; i < c->num_backends; i++) {
 		rdlock(&c->backends[i].lock, "backend", i);
