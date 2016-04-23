@@ -117,7 +117,7 @@ void pgr_vdlogf(FILE *io, int level, const char *file, int line, const char *fn,
 	}
 }
 
-void pgr_hexdump(const void *buf, size_t len)
+void pgr_hexdump_irl(const void *buf, size_t len)
 {
 	if (LOGLEVEL > LOG_DEBUG) {
 		return;

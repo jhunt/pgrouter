@@ -212,8 +212,14 @@ void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 void pgr_dlogf(FILE *io, int level, const char *file, int line, const char *fn, const char *fmt, ...);
 void pgr_vdlogf(FILE *io, int level, const char *file, int line, const char *fn, const char *fmt, va_list ap);
-void pgr_hexdump(const void *buf, size_t len);
-#define pgr_debugf(...) pgr_dlogf(stderr, LOG_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
+void pgr_hexdump_irl(const void *buf, size_t len);
+#ifdef NDEBUG
+#  define pgr_debugf(...)
+#  define pgr_hexdump(b,l)
+#else
+#  define pgr_debugf(...) pgr_dlogf(stderr, LOG_DEBUG, __FILE__, __LINE__, __func__, __VA_ARGS__)
+#  define pgr_hexdump(b,l) pgr_hexdump_irl((b), (l))
+#endif
 
 /* network subroutines */
 int pgr_listen4(const char *ep, int backlog);
