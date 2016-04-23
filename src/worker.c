@@ -125,7 +125,7 @@ static void handle_client(CONTEXT *c, int fd)
 		}
 
 		do {
-			recv = malloc(sizeof(MESSAGE));
+			recv = calloc(1, sizeof(MESSAGE));
 			if (!recv) {
 				pgr_abort(ABORT_MEMFAIL);
 			}
@@ -214,12 +214,26 @@ static void handle_client(CONTEXT *c, int fd)
 				}
 			}
 		} while (msg.type != 'Z');
+
+		/* free all of our memory... */
+		while (start != NULL) {
+			recv = start->next;
+			free(start->data);
+			free(start);
+			start = recv;
+		}
 	}
 shutdown:
 	pgr_debugf("closing all frontend and backend connections");
-	close(reader.fd);
-	close(writer.fd);
-	close(frontend.fd);
+	if (reader.fd >= 0) {
+		close(reader.fd);
+	}
+	if (writer.fd >= 0) {
+		close(writer.fd);
+	}
+	if (frontend.fd >= 0) {
+		close(frontend.fd);
+	}
 	return;
 }
 
