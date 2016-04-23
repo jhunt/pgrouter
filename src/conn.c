@@ -2,6 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+static int terminate_message(MESSAGE *msg)
+{
+	msg->type = 'X';
+	msg->length = 4;
+	return 0;
+}
+
 static int startup_message(MESSAGE *msg, CONNECTION *c)
 {
 	PARAM *p;
@@ -171,6 +178,18 @@ static int check_auth(CONNECTION *c, MESSAGE *msg)
 	return memcmp(msg->data + 3, hashed, 32);
 }
 
+static void free_params(PARAM *p)
+{
+	PARAM *tmp;
+	while (p) {
+		tmp = p->next;
+		free(p->name);
+		free(p->value);
+		free(p);
+		p = tmp;
+	}
+}
+
 void pgr_conn_init(CONTEXT *c, CONNECTION *dst)
 {
 	memset(dst, 0, sizeof(CONNECTION));
@@ -182,6 +201,14 @@ void pgr_conn_init(CONTEXT *c, CONNECTION *dst)
 
 	int rnd = pgr_rand(0, 0xffffffff);
 	memcpy(dst->salt, &rnd, 4);
+}
+
+void pgr_conn_deinit(CONNECTION *c)
+{
+	if (c->fd >= 0) {
+		close(c->fd);
+	}
+	free_params(c->params);
 }
 
 void pgr_conn_frontend(CONNECTION *dst, int fd)
@@ -204,15 +231,7 @@ int pgr_conn_copy(CONNECTION *dst, CONNECTION *src)
 
 	dst->pwhash = src->pwhash;
 
-	a = dst->params;
-	while (a) {
-		b = a->next;
-		free(a->name);
-		free(a->value);
-		free(a);
-		a = b;
-	}
-
+	free_params(dst->params);
 	a = NULL;
 	for (b = src->params; b; b = b->next) {
 		if (a) {
@@ -243,6 +262,7 @@ int pgr_conn_connect(CONNECTION *c)
 		return rc;
 	}
 	rc = pgr_msg_send(c->fd, &msg);
+	pgr_msg_clear(&msg);
 	if (rc != 0) {
 		return rc;
 	}
@@ -260,27 +280,33 @@ int pgr_conn_connect(CONNECTION *c)
 			pgr_logf(stderr, LOG_ERR, "got an error from %s:%d: %s %s %s",
 					c->hostname, c->port, msg.error.severity, msg.error.sqlstate,
 					msg.error.message);
+			pgr_msg_clear(&msg);
 			return -1;
 
 		case 'N':
 			pgr_logf(stderr, LOG_INFO, "got a notice from %s:%d: %s %s %s",
 					c->hostname, c->port, msg.error.severity, msg.error.sqlstate,
 					msg.error.message);
+			pgr_msg_clear(&msg);
 			break;
 
 		case 'R': /* Authentication */
 			switch (msg.auth.code) {
 			case 0:                                /* AuthenticationOK */
+				pgr_msg_clear(&msg);
 				break;
 
 			case 5:                       /* AuthenticationMD5Password */
 				memcpy(c->salt, msg.data + 4, 4);
+				pgr_msg_clear(&msg);
+
 				pgr_debugf("sending PasswordMessage to backend (fd %d)", c->fd);
 				rc = password_message(&msg, c);
 				if (rc != 0) {
 					return rc;
 				}
 				rc = pgr_msg_send(c->fd, &msg);
+				pgr_msg_clear(&msg);
 				if (rc != 0) {
 					return rc;
 				}
@@ -288,23 +314,28 @@ int pgr_conn_connect(CONNECTION *c)
 
 			default:                           /* all other auth types */
 				pgr_logf(stderr, LOG_ERR, "unsupported authentication type %d", msg.auth.code);
+				pgr_msg_clear(&msg);
 				return -1;
 			}
 			break;
 
 		case 'K': /* BackendKeyData */
 			/* FIXME: BackendKeyData is currently ignored */
+			pgr_msg_clear(&msg);
 			break;
 
 		case 'S': /* ParameterStatus */
 			/* FIXME: ParameterStatus is currently ignored */
+			pgr_msg_clear(&msg);
 			break;
 
 		case 'Z': /* ReadyForQuery */
+			pgr_msg_clear(&msg);
 			return 0;
 
 		default:
 			pgr_debugf("invalid '%c' message received from frontend; disconnecting");
+			pgr_msg_clear(&msg);
 			return -1;
 		}
 	}
@@ -328,6 +359,7 @@ int pgr_conn_accept(CONNECTION *c)
 		case MSG_SSL_REQUEST:
 			/* FIXME: SSL not supported in this iteration */
 			pgr_debugf("received SSLRequest; replying with 'N' (not supported)");
+			pgr_msg_clear(&msg);
 			if (write(c->fd, "N", 1) != 1) {
 				return -1;
 			}
@@ -336,15 +368,18 @@ int pgr_conn_accept(CONNECTION *c)
 		case MSG_STARTUP_MESSAGE:
 			pgr_debugf("extracting parameters from StartupMessage");
 			rc = extract_params(c, &msg);
+			pgr_msg_clear(&msg);
 			if (rc != 0) {
 				return rc;
 			}
+
 			pgr_debugf("sending AuthenticationMD5Password to backend (fd %d)", c->fd);
 			rc = auth_md5_message(&msg, c);
 			if (rc != 0) {
 				return rc;
 			}
 			rc = pgr_msg_send(c->fd, &msg);
+			pgr_msg_clear(&msg);
 			if (rc != 0) {
 				return rc;
 			}
@@ -353,8 +388,8 @@ int pgr_conn_accept(CONNECTION *c)
 		case 'p': /* PasswordMessage */
 			pgr_debugf("received PasswordMessage");
 			rc = check_auth(c, &msg);
+			pgr_msg_clear(&msg);
 			if (rc != 0) {
-				pgr_msg_clear(&msg);
 				msg.type = 'E';
 				msg.error.severity = "ERROR";
 				msg.error.sqlstate = "28P01";
@@ -369,7 +404,7 @@ int pgr_conn_accept(CONNECTION *c)
 					pgr_logf(stderr, LOG_ERR, "failed to send ErrorResponse to frontend (in response to md5 authentication failure)");
 				}
 				free(msg.error.message);
-				msg.error.message = "(invalid error message)";
+				pgr_msg_clear(&msg);
 				return 1;
 			}
 
@@ -379,6 +414,7 @@ int pgr_conn_accept(CONNECTION *c)
 				return rc;
 			}
 			rc = pgr_msg_send(c->fd, &msg);
+			pgr_msg_clear(&msg);
 			if (rc != 0) {
 				return rc;
 			}
@@ -390,6 +426,7 @@ int pgr_conn_accept(CONNECTION *c)
 				return rc;
 			}
 			rc = pgr_msg_send(c->fd, &msg);
+			pgr_msg_clear(&msg);
 			if (rc != 0) {
 				return rc;
 			}
@@ -400,4 +437,17 @@ int pgr_conn_accept(CONNECTION *c)
 			return -1;
 		}
 	}
+}
+
+void pgr_conn_terminate(CONNECTION *c)
+{
+	int rc;
+	MESSAGE msg;
+
+	rc = terminate_message(&msg);
+	if (rc != 0) {
+		return;
+	}
+
+	pgr_msg_send(c->fd, &msg);
 }

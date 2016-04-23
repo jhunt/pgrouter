@@ -136,6 +136,7 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 		memcpy(buf+5, m->data, m->length - 4);
 	}
 	pgr_hexdump(buf, m->length + (isuntyped(m->type) ? 0 : 1));
+	free(buf);
 
 	return 0;
 }
@@ -143,27 +144,36 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 int pgr_msg_send(int fd, MESSAGE *m)
 {
 	char *buf;
+	int rc;
 	int len = htonl(m->length);
 
 	if (isuntyped(m->type)) {
 		buf = malloc(m->length);
 		memcpy(buf, &len, 4);
 		memcpy(buf + 4, m->data, m->length - 4);
-		return pgr_sendn(fd, buf, m->length);
+
+		rc = pgr_sendn(fd, buf, m->length);
+		free(buf);
+		return rc;
 
 	} else {
 		buf = malloc(1 + m->length);
 		buf[0] = m->type;
 		memcpy(buf + 1, &len, 4);
 		memcpy(buf + 5, m->data, m->length - 4);
-		return pgr_sendn(fd, buf, 1 + m->length);
+
+		rc = pgr_sendn(fd, buf, 1 + m->length);
+		free(buf);
+		return rc;
 	}
 }
 
 void pgr_msg_clear(MESSAGE *m)
 {
 	free(m->data);
+	char type = m->type;
 	memset(m, 0, sizeof(MESSAGE));
+	m->type = type;
 }
 
 void pgr_msg_pack(MESSAGE *m)

@@ -40,6 +40,8 @@ static int* prng_seed()
 			pgr_abort(ABORT_RANDFAIL);
 		}
 		close(fd);
+
+		pthread_setspecific(seed, SEED);
 	}
 
 	return SEED;

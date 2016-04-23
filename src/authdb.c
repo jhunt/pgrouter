@@ -526,6 +526,24 @@ static int parse_top(PARSER *p)
 	return 0;
 }
 
+static void parser_free(PARSER *p)
+{
+	free(p->l->file);
+	free(p->l->src);
+	free(p->l);
+
+	struct _auth_entry *tmp, *next = p->entries;
+	while (next) {
+		tmp = next->next;
+		free(next->username);
+		free(next->password);
+		free(next);
+		next = tmp;
+	}
+
+	free(p);
+}
+
 static PARSER* parser_init(const char *file, FILE *io, int reload)
 {
 	PARSER *p = calloc(1, sizeof(PARSER));
@@ -552,9 +570,14 @@ int pgr_authdb(CONTEXT *c, int reload)
 	}
 
 	PARSER *p = parser_init(c->authdb.file, io, reload);
+	fclose(io);
+	if (!p) {
+		return 1;
+	}
 
 	rc = parse(p);
 	if (rc != 0) {
+		parser_free(p);
 		return rc;
 	}
 
@@ -565,6 +588,7 @@ int pgr_authdb(CONTEXT *c, int reload)
 		free(c->authdb.usernames);
 		free(c->authdb.md5hashes);
 		fprintf(stderr, "failed to allocate memory for final authdb entries: %s\n", strerror(errno));
+		parser_free(p);
 		return -1;
 	}
 
@@ -578,6 +602,7 @@ int pgr_authdb(CONTEXT *c, int reload)
 		entry->username = entry->password = NULL;
 	}
 
+	parser_free(p);
 	return 0;
 }
 

@@ -193,6 +193,7 @@ void pgr_srand(int seed);
 
 /* configuration subroutines */
 int pgr_configure(CONTEXT *c, const char *file, int reload);
+void pgr_deconfigure(CONTEXT *c);
 int pgr_authdb(CONTEXT *c, int reload);
 int pgr_context(CONTEXT *c);
 
@@ -229,6 +230,7 @@ void pgr_conn_backend(CONNECTION *dst, BACKEND *b, int i);
 int pgr_conn_copy(CONNECTION *dst, CONNECTION *src);
 int pgr_conn_connect(CONNECTION *c);
 int pgr_conn_accept(CONNECTION *c);
+void pgr_conn_terminate(CONNECTION *c);
 
 /* message (protocol) subroutines */
 /* FIXME: need timeout variation of pgr_msg_recv */

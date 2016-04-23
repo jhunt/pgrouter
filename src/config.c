@@ -729,13 +729,13 @@ static int parse_top(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_LISTEN:   set_str(&p->listen, s);  break;
-		case T_KEYWORD_MONITOR:  set_str(&p->monitor, s); break;
-		case T_KEYWORD_HBA:      set_str(&p->hbafile, s); break;
-		case T_KEYWORD_USER:     set_str(&p->user, s);    break;
-		case T_KEYWORD_GROUP:    set_str(&p->group, s);   break;
-		case T_KEYWORD_PIDFILE:  set_str(&p->pidfile, s); break;
-		case T_KEYWORD_AUTHDB:   set_str(&p->authdb, s);  break;
+		case T_KEYWORD_LISTEN:   set_str(&p->listen, s);  free(s); break;
+		case T_KEYWORD_MONITOR:  set_str(&p->monitor, s); free(s); break;
+		case T_KEYWORD_HBA:      set_str(&p->hbafile, s); free(s); break;
+		case T_KEYWORD_USER:     set_str(&p->user, s);    free(s); break;
+		case T_KEYWORD_GROUP:    set_str(&p->group, s);   free(s); break;
+		case T_KEYWORD_PIDFILE:  set_str(&p->pidfile, s); free(s); break;
+		case T_KEYWORD_AUTHDB:   set_str(&p->authdb, s);  free(s); break;
 		}
 		return 0;
 
@@ -918,9 +918,9 @@ static int parse_health(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_DATABASE: set_str(&p->health_database, s); break;
-		case T_KEYWORD_USERNAME: set_str(&p->health_username, s); break;
-		case T_KEYWORD_PASSWORD: set_str(&p->health_password, s); break;
+		case T_KEYWORD_DATABASE: set_str(&p->health_database, s); free(s); break;
+		case T_KEYWORD_USERNAME: set_str(&p->health_username, s); free(s); break;
+		case T_KEYWORD_PASSWORD: set_str(&p->health_password, s); free(s); break;
 		}
 		return 0;
 
@@ -974,9 +974,9 @@ static int parse_tls(PARSER *p)
 			return -1;
 		}
 		switch (t1.type) {
-		case T_KEYWORD_CIPHERS: set_str(&p->tls_ciphers, s);  break;
-		case T_KEYWORD_CERT:    set_str(&p->tls_certfile, s); break;
-		case T_KEYWORD_KEY:     set_str(&p->tls_keyfile, s);  break;
+		case T_KEYWORD_CIPHERS: set_str(&p->tls_ciphers, s);  free(s); break;
+		case T_KEYWORD_CERT:    set_str(&p->tls_certfile, s); free(s); break;
+		case T_KEYWORD_KEY:     set_str(&p->tls_keyfile, s);  free(s); break;
 		}
 		break;
 
@@ -992,18 +992,34 @@ static int parse_tls(PARSER *p)
 	return 0;
 }
 
+static void parser_free(PARSER *p)
+{
+	free(p->l->file);
+	free(p->l->src);
+	free(p->l);
+
+	struct _backend *tmp, *next = p->backends;
+	while (next) {
+		tmp = next->next;
+		free(next->id);
+		free(next);
+		next = tmp;
+	}
+	free(p);
+}
+
 static PARSER* parser_init(const char *file, FILE *io, int reload)
 {
 	PARSER *p = calloc(1, sizeof(PARSER));
 	if (!p) {
-		return NULL;
+		pgr_abort(ABORT_MEMFAIL);
 	}
 
 	p->backends = make_backend(NULL);
 	p->f = parse_top;
 	p->l = lexer_init(file, io);
 	if (!p->l) {
-		free(p);
+		parser_free(p);
 		return NULL;
 	}
 
@@ -1049,6 +1065,10 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		}
 	}
 	PARSER *p = parser_init(file, io, reload);
+	fclose(io);
+	if (!p) {
+		return 1;
+	}
 
 	rc = parse(p);
 	if (rc != 0) {
@@ -1191,6 +1211,7 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		}
 		c->backends = calloc(c->num_backends, sizeof(BACKEND));
 		if (!c->backends) {
+			parser_free(p);
 			return 1;
 		}
 
@@ -1200,6 +1221,7 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		for (i = 0; i < c->num_backends; i++, b = b->next) {
 			rc = hostport(b->id, &c->backends[i].hostname, &c->backends[i].port);
 			if (rc != 0) {
+				parser_free(p);
 				return 1;
 			}
 			c->backends[i].serial++;
@@ -1213,7 +1235,40 @@ int pgr_configure(CONTEXT *c, const char *file, int reload)
 		}
 	}
 
+	parser_free(p);
 	return 0;
+}
+
+void pgr_deconfigure(CONTEXT *c)
+{
+	int i;
+
+	for (i = 0; i < c->num_backends; i++) {
+		free(c->backends[i].hostname);
+	}
+	free(c->backends);
+
+	free(c->health.database);
+	free(c->health.username);
+	free(c->health.password);
+
+	free(c->startup.frontend);
+	free(c->startup.monitor);
+	free(c->startup.hbafile);
+	free(c->startup.pidfile);
+	free(c->startup.tls_ciphers);
+	free(c->startup.tls_certfile);
+	free(c->startup.tls_keyfile);
+	free(c->startup.user);
+	free(c->startup.group);
+
+	free(c->authdb.file);
+	for (i = 0; i < c->authdb.num_entries; i++) {
+		free(c->authdb.usernames[i]);
+		free(c->authdb.md5hashes[i]);
+	}
+	free(c->authdb.usernames);
+	free(c->authdb.md5hashes);
 }
 
 #ifdef PTEST

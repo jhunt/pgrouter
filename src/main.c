@@ -11,6 +11,34 @@
 
 #define DEFAULT_CONFIG_FILE "/etc/pgrouter.conf"
 
+typedef struct {
+	pthread_t  watcher;  /* watcher thread id       */
+	pthread_t  monitor;  /* monitor thread id       */
+	pthread_t *workers;  /* worker thread ids       */
+	int        n;        /* how many worker threads */
+} THREADSET;
+
+static void do_shutdown(THREADSET *threads)
+{
+	int i;
+	void *ret;
+
+	/* first we cancel */
+	pthread_cancel(threads->watcher);
+	pthread_cancel(threads->monitor);
+	for (i = 0; i < threads->n; i++) {
+		pthread_cancel(threads->workers[i]);
+	}
+
+	/* then we join */
+	pthread_join(threads->watcher, &ret);
+	pthread_join(threads->monitor, &ret);
+
+	for (i = 0; i < threads->n; i++) {
+		pthread_join(threads->workers[i], &ret);
+	}
+}
+
 int main(int argc, char **argv)
 {
 	char *config = strdup(DEFAULT_CONFIG_FILE);
@@ -105,12 +133,7 @@ int main(int argc, char **argv)
 		pgr_abort(ABORT_NET);
 	}
 
-	struct {
-		pthread_t  watcher;  /* watcher thread id       */
-		pthread_t  monitor;  /* monitor thread id       */
-		pthread_t *workers;  /* worker thread ids       */
-		int        n;        /* how many worker threads */
-	} threads;
+	THREADSET threads;
 	threads.n = c.workers;
 	threads.workers = calloc(threads.n, sizeof(pthread_t));
 	if (!threads.workers) {
@@ -171,16 +194,27 @@ int main(int argc, char **argv)
 		case SIGTERM:
 			pgr_logf(stderr, LOG_INFO, "[super] caught SIGTERM (%d)", sig);
 			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			do_shutdown(&threads);
+			free(threads.workers);
+			free(config);
+			pgr_deconfigure(&c);
 			return 1;
 
 		case SIGINT:
 			pgr_logf(stderr, LOG_INFO, "[super] caught SIGINT (%d)", sig);
 			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			do_shutdown(&threads);
+			free(threads.workers);
+			free(config);
+			pgr_deconfigure(&c);
 			return 2;
 
 		case SIGQUIT:
 			pgr_logf(stderr, LOG_INFO, "[super] caught SIGQUIT (%d)", sig);
 			pgr_logf(stderr, LOG_INFO, "pgrouter shutting down");
+			do_shutdown(&threads);
+			free(threads.workers);
+			pgr_deconfigure(&c);
 			return 3;
 
 		case SIGHUP:

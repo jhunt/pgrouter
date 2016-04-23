@@ -195,8 +195,7 @@ static void* do_watcher(void *_c)
 					pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory for result of `%s` query", sql);
 					pgr_abort(ABORT_MEMFAIL);
 				}
-				if (PQresultStatus(result) == PGRES_TUPLES_OK) {
-				} else {
+				if (PQresultStatus(result) != PGRES_TUPLES_OK) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
 							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
 					BACKENDS[i].ok = BACKEND_IS_HALFUP;
@@ -228,6 +227,7 @@ static void* do_watcher(void *_c)
 				BACKENDS[i].role = *val == 't' ? BACKEND_ROLE_SLAVE : BACKEND_ROLE_MASTER;
 				PQclear(result);
 
+				/* determine xlog position */
 				if (BACKENDS[i].role == BACKEND_ROLE_MASTER) {
 					sql = "SELECT pg_current_xlog_location()";
 				} else {
@@ -238,8 +238,7 @@ static void* do_watcher(void *_c)
 					pgr_logf(stderr, LOG_ERR, "[watcher] failed to allocate memory for result of `%s` query", sql);
 					pgr_abort(ABORT_MEMFAIL);
 				}
-				if (PQresultStatus(result) == PGRES_TUPLES_OK) {
-				} else {
+				if (PQresultStatus(result) != PGRES_TUPLES_OK) {
 					pgr_logf(stderr, LOG_ERR, "[watcher] got an unexpected %s from %s backend, in response to `%s` query",
 							PQresStatus(PQresultStatus(result)), BACKENDS[i].endpoint, sql);
 					BACKENDS[i].ok = BACKEND_IS_HALFUP;
@@ -273,7 +272,6 @@ static void* do_watcher(void *_c)
 					PQclear(result);
 					break;
 				}
-				PQclear(result);
 
 				/* keep track of our master position for lag calculations */
 				if (BACKENDS[i].role == BACKEND_ROLE_MASTER) {
@@ -281,13 +279,18 @@ static void* do_watcher(void *_c)
 				}
 
 				BACKENDS[i].ok = BACKEND_IS_OK;
+				PQclear(result);
 				break;
 
 			default:
 				pgr_logf(stderr, LOG_ERR, "[watcher] unhandled connection status %d from backend %s",
 						rc, BACKENDS[i].endpoint);
+				PQclear(result);
 				break;
 			}
+
+			PQfinish(conn);
+
 			/* FIXME: look at using PQstartConnect() with a select loop */
 		}
 
