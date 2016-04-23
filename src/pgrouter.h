@@ -61,10 +61,13 @@ typedef struct {
 	unsigned int  blk[16];
 } MD5;
 
-typedef struct {
+typedef struct __message MESSAGE;
+struct __message {
 	unsigned char type;   /* one of the MSG_* constants          */
 	int length;           /* length of message payload (data+4)  */
 	unsigned char *data;  /* the actual data, (len-4) octets     */
+
+	MESSAGE *next;
 
 	/* auxiliary fields, based on type */
 	struct {
@@ -78,7 +81,7 @@ typedef struct {
 		char *details;    /* */
 		char *hint;       /* */
 	} error;
-} MESSAGE;
+};
 
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */

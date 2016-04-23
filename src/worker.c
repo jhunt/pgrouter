@@ -74,6 +74,22 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	return -1;
 }
 
+static int ignore_until(const char *type, int fd, char until)
+{
+	int rc;
+	MESSAGE msg;
+
+	do {
+		pgr_debugf("ignoring message from %s (fd %d)", type, fd);
+		rc = pgr_msg_recv(fd, &msg);
+		if (rc != 0) {
+			return rc;
+		}
+	} while (msg.type != until);
+
+	return 0;
+}
+
 static void handle_client(CONTEXT *c, int fd)
 {
 	int rc, i, state;
@@ -95,29 +111,62 @@ static void handle_client(CONTEXT *c, int fd)
 		goto shutdown;
 	}
 
-	int befd = reader.fd;
 	for (;;) {
+		int befd = reader.fd;
+		MESSAGE  *start = NULL; /* first message buffered from frontend */
+		MESSAGE **next  = NULL; /* pointer to insertion point of next message */
+		MESSAGE  *recv  = NULL; /* working copy */
+
 		do {
-			pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
-			rc = pgr_msg_recv(frontend.fd, &msg);
-			if (rc != 0) {
-				goto shutdown;
+			recv = malloc(sizeof(MESSAGE));
+			if (!recv) {
+				pgr_abort(ABORT_MEMFAIL);
 			}
 
-			pgr_debugf("relaying message from frontend (fd %d) to %s (fd %d)",
-					frontend.fd, befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_msg_send(reader.fd, &msg);
+			pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
+			rc = pgr_msg_recv(frontend.fd, recv);
 			if (rc != 0) {
 				goto shutdown;
 			}
-		} while (msg.type != 'Q' && msg.type != 'S');
+			if (start == NULL) {
+				start = recv;
+			} else if (next != NULL && *next != NULL) {
+				*next = recv;
+			}
+			next = &recv->next;
+
+			if (recv->type == 'Q' && strcasecmp(recv->data, "BEGIN") == 0) {
+				befd = writer.fd; /* force transactions to writer */
+			}
+		} while (recv->type != 'Q' && recv->type != 'S');
+
+	relay:
+		pgr_debugf("relaying messages");
+		for (recv = start; recv != NULL; recv = recv->next) {
+			pgr_debugf("relaying message from frontend (fd %d) to %s (fd %d)",
+					frontend.fd, befd == reader.fd ? "reader" : "writer", befd);
+			rc = pgr_msg_send(befd, recv);
+			if (rc != 0) {
+				goto shutdown;
+			}
+		}
 
 		do {
 			pgr_debugf("receiving message from %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_msg_recv(reader.fd, &msg);
+			rc = pgr_msg_recv(befd, &msg);
 			if (rc != 0) {
 				goto shutdown;
+			}
+
+			if (msg.type == 'E' && strcmp(msg.error.sqlstate, "25006") == 0 && befd != writer.fd) {
+				rc = ignore_until(befd == reader.fd ? "reader" : "writer", befd, 'Z');
+				if (rc != 0) {
+					goto shutdown;
+				}
+
+				befd = writer.fd;
+				goto relay;
 			}
 
 			pgr_debugf("relaying message from %s (fd %d) to frontend (fd %d)",
