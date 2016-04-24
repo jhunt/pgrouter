@@ -81,6 +81,7 @@ static int ignore_until(const char *type, int fd, char until)
 {
 	int rc;
 	MESSAGE msg;
+	memset(&msg, 0, sizeof(msg));
 
 	do {
 		pgr_debugf("ignoring message from %s (fd %d)", type, fd);
@@ -99,6 +100,7 @@ static void handle_client(CONTEXT *c, int fd)
 	int rc, i, state;
 	CONNECTION frontend, reader, writer;
 	MESSAGE msg;
+	memset(&msg, 0, sizeof(msg));
 
 	pgr_conn_init(c, &frontend);
 	pgr_conn_init(c, &reader);
@@ -184,7 +186,7 @@ static void handle_client(CONTEXT *c, int fd)
 				goto shutdown;
 			}
 
-			if (msg.type == 'E' && strcmp(msg.error.sqlstate, "25006") == 0 && befd != writer.fd) {
+			if (msg.type == 'E' && strcmp(pgr_msg_ecode(&msg), "25006") == 0 && befd != writer.fd) {
 				pgr_msg_clear(&msg);
 				rc = ignore_until(befd == reader.fd ? "reader" : "writer", befd, 'Z');
 				if (rc != 0) {

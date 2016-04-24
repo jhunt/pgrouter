@@ -63,9 +63,9 @@ typedef struct {
 
 typedef struct __message MESSAGE;
 struct __message {
-	unsigned char type;   /* one of the MSG_* constants          */
-	int length;           /* length of message payload (data+4)  */
-	unsigned char *data;  /* the actual data, (len-4) octets     */
+	char type;   /* one of the MSG_* constants          */
+	int length;  /* length of message payload (data+4)  */
+	char *data;  /* the actual data, (len-4) octets     */
 
 	MESSAGE *next;
 
@@ -244,6 +244,12 @@ int pgr_msg_recv(int fd, MESSAGE *m);
 int pgr_msg_send(int fd, MESSAGE *m);
 void pgr_msg_pack(MESSAGE *m);
 void pgr_msg_clear(MESSAGE *m);
+
+const char* pgr_msg_esev(MESSAGE *m);
+const char* pgr_msg_ecode(MESSAGE *m);
+const char* pgr_msg_emsg(MESSAGE *m);
+
+void pgr_msg_err(MESSAGE *m, char *sev, char *code, char *msg, ...);
 
 /* thread subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);

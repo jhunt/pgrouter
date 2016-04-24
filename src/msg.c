@@ -59,8 +59,8 @@ int pgr_msg_recv(int fd, MESSAGE *m)
 				m->length);
 
 		if (m->length >= 8) {
-			unsigned short hi16 = (m->data[0] << 8) | m->data[1];
-			unsigned short lo16 = (m->data[2] << 8) | m->data[3];
+			unsigned short hi16 = ((m->data[0] & 0xff) << 8) | (m->data[1] & 0xff);
+			unsigned short lo16 = ((m->data[2] & 0xff) << 8) | (m->data[3] & 0xff);
 			const char *type;
 
 			pgr_debugf("length %d and payload %02x %02x (%u) %02x %02x (%u)",
@@ -170,6 +170,13 @@ int pgr_msg_send(int fd, MESSAGE *m)
 
 void pgr_msg_clear(MESSAGE *m)
 {
+	if (m->error.message
+	 && (m->error.message < m->data || m->error.message > m->data + m->length)) {
+		pgr_debugf("freeing error.message at %p (not in %p ... %p)",
+				m->error.message, m->data, m->data + m->length);
+		pgr_debugf("message is '%s'", m->error.message);
+		free(m->error.message);
+	}
 	free(m->data);
 	char type = m->type;
 	memset(m, 0, sizeof(MESSAGE));
@@ -211,4 +218,32 @@ void pgr_msg_pack(MESSAGE *m)
 		}
 		*p = '\0';
 	}
+}
+
+const char* pgr_msg_esev(MESSAGE *m)
+{
+	return m->error.severity;
+}
+
+const char* pgr_msg_ecode(MESSAGE *m)
+{
+	return m->error.sqlstate;
+}
+
+const char* pgr_msg_emsg(MESSAGE *m)
+{
+	return m->error.message;
+}
+
+void pgr_msg_err(MESSAGE *m, char *sev, char *code, char *msg, ...)
+{
+	va_list ap;
+
+	m->type = 'E';
+	m->error.severity = sev;
+	m->error.sqlstate = code;
+
+	va_start(ap, msg);
+	vasprintf(&m->error.message, msg, ap);
+	va_end(ap);
 }

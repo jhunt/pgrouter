@@ -249,6 +249,7 @@ int pgr_conn_connect(CONNECTION *c)
 {
 	int rc;
 	MESSAGE msg;
+	memset(&msg, 0, sizeof(MESSAGE));
 
 	c->fd = pgr_connect(c->hostname, c->port, c->timeout * 1000);
 	if (c->fd < 0) {
@@ -278,15 +279,15 @@ int pgr_conn_connect(CONNECTION *c)
 		switch (msg.type) {
 		case 'E':
 			pgr_logf(stderr, LOG_ERR, "got an error from %s:%d: %s %s %s",
-					c->hostname, c->port, msg.error.severity, msg.error.sqlstate,
-					msg.error.message);
+					c->hostname, c->port, pgr_msg_esev(&msg), pgr_msg_ecode(&msg),
+					pgr_msg_emsg(&msg));
 			pgr_msg_clear(&msg);
 			return -1;
 
 		case 'N':
 			pgr_logf(stderr, LOG_INFO, "got a notice from %s:%d: %s %s %s",
-					c->hostname, c->port, msg.error.severity, msg.error.sqlstate,
-					msg.error.message);
+					c->hostname, c->port, pgr_msg_esev(&msg), pgr_msg_ecode(&msg),
+					pgr_msg_emsg(&msg));
 			pgr_msg_clear(&msg);
 			break;
 
@@ -390,20 +391,15 @@ int pgr_conn_accept(CONNECTION *c)
 			rc = check_auth(c, &msg);
 			pgr_msg_clear(&msg);
 			if (rc != 0) {
-				msg.type = 'E';
-				msg.error.severity = "ERROR";
-				msg.error.sqlstate = "28P01";
-				asprintf(&msg.error.message, "password authentication failed for user \"%s\"",
-						c->username);
-
+				pgr_msg_err(&msg, "ERROR", "28P01",
+						"password authentication failed for user \"%s\"", c->username);
 				pgr_debugf("authentication failed; sending ErrorResponse %s %s",
-						msg.error.severity, msg.error.sqlstate);
+						pgr_msg_esev(&msg), pgr_msg_ecode(&msg));
 				pgr_msg_pack(&msg);
 				rc = pgr_msg_send(c->fd, &msg);
 				if (rc != 0) {
 					pgr_logf(stderr, LOG_ERR, "failed to send ErrorResponse to frontend (in response to md5 authentication failure)");
 				}
-				free(msg.error.message);
 				pgr_msg_clear(&msg);
 				return 1;
 			}
@@ -443,6 +439,7 @@ void pgr_conn_terminate(CONNECTION *c)
 {
 	int rc;
 	MESSAGE msg;
+	memset(&msg, 0, sizeof(msg));
 
 	rc = terminate_message(&msg);
 	if (rc != 0) {
