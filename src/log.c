@@ -83,6 +83,14 @@ static void _vdlogf(FILE *io, const char *file, int line, const char *fn, const 
 	free(msg);
 }
 
+void pgr_msgf(FILE *io, const char *fmt, ...)
+{
+	va_list ap;
+	va_start(ap, fmt);
+	_vlogf(io, fmt, ap);
+	va_end(ap);
+}
+
 void pgr_logf(FILE *io, int level, const char *fmt, ...)
 {
 	if (level <= LOGLEVEL) {

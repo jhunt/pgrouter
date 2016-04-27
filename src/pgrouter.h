@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <pthread.h>
 #include <syslog.h>
 
@@ -38,12 +39,6 @@ char* pgr_backend_role(int role);
 #define ABORT_UNIMPL   7
 #define ABORT_ABSURD   8
 
-/* Message types */
-#define MSG_STARTUP_MESSAGE 1
-#define MSG_SSL_REQUEST     2
-#define MSG_CANCEL_REQUEST  3
-#define isuntyped(x) ((x) < 4)
-
 /* Defaults */
 #define DEFAULT_MONITOR_BIND  "127.0.0.1:14231"
 #define DEFAULT_FRONTEND_BIND "*:5432"
@@ -60,28 +55,6 @@ typedef struct {
 	unsigned char buf[64];
 	unsigned int  blk[16];
 } MD5;
-
-typedef struct __message MESSAGE;
-struct __message {
-	char type;   /* one of the MSG_* constants          */
-	int length;  /* length of message payload (data+4)  */
-	char *data;  /* the actual data, (len-4) octets     */
-
-	MESSAGE *next;
-
-	/* auxiliary fields, based on type */
-	struct {
-		int code;
-	} auth;
-
-	struct {
-		char *severity;   /* */
-		char *sqlstate;   /* */
-		char *message;    /* */
-		char *details;    /* */
-		char *hint;       /* */
-	} error;
-};
 
 typedef struct {
 	pthread_rwlock_t lock;      /* read/write lock for sync.    */
@@ -184,6 +157,52 @@ typedef struct {
 	int fd;
 } CONNECTION;
 
+#define MSG_BUFSIZ 16384
+
+typedef struct {
+	char buf[MSG_BUFSIZ];
+	int free;    /* how many bytes are free in the buffer */
+	int offset;  /* how far have we ready into the buffer */
+} MSG;
+
+MSG* pgr_m_new();
+void pgr_m_init(MSG *m);
+
+void pgr_m_skip(MSG *m, size_t n);
+void pgr_m_discard(MSG *m, int fd);
+void pgr_m_flush(MSG *m);
+
+int pgr_m_write(MSG *m, const void *buf, size_t len);
+
+int pgr_m_sendn(MSG *m, int fd, size_t len);
+int pgr_m_resend(MSG *m, int fd);
+
+int pgr_m_next(MSG *m, int fd);
+int pgr_m_relay(MSG *m, int from, int to);
+
+int pgr_m_ignore(MSG *m, int fd, const char *until);
+
+int pgr_m_iserror(MSG *m, const char *code);
+void pgr_m_errorf(MSG *m, char *sev, char *code, char *msg, ...);
+
+#define pgr_m_offset(m) ((m)->offset)
+#define pgr_m_free(m)   ((m)->free)
+#define pgr_m_used(m)   (MSG_BUFSIZ - (m)->free)
+#define pgr_m_unread(m) (pgr_m_used(m) - pgr_m_offset(m))
+#define pgr_m_reset(m)  ((m)->offset = 0, (m)->free = MSG_BUFSIZ)
+#define pgr_m_rewind(m) ((m)->offset = 0)
+#define pgr_m_send(m,f) pgr_m_sendn((m), (f), pgr_m_unread(m))
+
+#define pgr_m_buffer(m)   ((m)->buf+(m)->offset)
+#define pgr_m_str_at(m,i) ((char*)(m)->buf+(m)->offset+(i))
+#define pgr_m_u8_at(m,i)  ((uint8_t)((m)->buf[(m)->offset+(i)]))
+#define pgr_m_u16_at(m,i) ((uint16_t)(  (pgr_m_u8_at((m),(i))   <<  8) \
+                                      | (pgr_m_u8_at((m),(i)+1))))
+#define pgr_m_u32_at(m,i) ((uint32_t)(  (pgr_m_u8_at((m),(i))   << 24) \
+                                      | (pgr_m_u8_at((m),(i)+1) << 16) \
+                                      | (pgr_m_u8_at((m),(i)+2) <<  8) \
+                                      | (pgr_m_u8_at((m),(i)+3))))
+
 /* process control subroutines */
 void pgr_abort(int code);
 
@@ -208,6 +227,7 @@ void pgr_md5_hex(char dst[32], MD5 *md5);
 
 /* logging subroutines */
 void pgr_logger(int level);
+void pgr_msgf(FILE *io, const char *fmt, ...);
 void pgr_logf(FILE *io, int level, const char *fmt, ...);
 void pgr_vlogf(FILE *io, int level, const char *fmt, va_list ap);
 void pgr_dlogf(FILE *io, int level, const char *file, int line, const char *fn, const char *fmt, ...);
@@ -236,20 +256,6 @@ void pgr_conn_backend(CONNECTION *dst, BACKEND *b, int i);
 int pgr_conn_copy(CONNECTION *dst, CONNECTION *src);
 int pgr_conn_connect(CONNECTION *c);
 int pgr_conn_accept(CONNECTION *c);
-void pgr_conn_terminate(CONNECTION *c);
-
-/* message (protocol) subroutines */
-/* FIXME: need timeout variation of pgr_msg_recv */
-int pgr_msg_recv(int fd, MESSAGE *m);
-int pgr_msg_send(int fd, MESSAGE *m);
-void pgr_msg_pack(MESSAGE *m);
-void pgr_msg_clear(MESSAGE *m);
-
-const char* pgr_msg_esev(MESSAGE *m);
-const char* pgr_msg_ecode(MESSAGE *m);
-const char* pgr_msg_emsg(MESSAGE *m);
-
-void pgr_msg_err(MESSAGE *m, char *sev, char *code, char *msg, ...);
 
 /* thread subroutines */
 int pgr_watcher(CONTEXT *c, pthread_t* tid);

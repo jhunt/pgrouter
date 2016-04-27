@@ -1,4 +1,5 @@
 #include "pgrouter.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
@@ -8,6 +9,33 @@
 #include "locks.inc.c"
 
 #define max(a,b) ((a) > (b) ? (a) : (b))
+
+static double time_ms()
+{
+	int rc;
+	struct timeval tv;
+
+	rc = gettimeofday(&tv, NULL);
+	if (rc) {
+		pgr_debugf("gettimeofday() failed: %s (errno %d)", strerror(errno), errno);
+		pgr_abort(ABORT_ABSURD);
+	}
+
+	return tv.tv_sec + (tv.tv_usec / 1000000.0);
+}
+
+static void dump_timer(const char *type, double start, double end)
+{
+	pgr_debugf("[TIMER] %s: %0.3lf elapsed", type, end - start);
+}
+
+static struct {
+	double start, end;
+	int x;
+} WATCH;
+
+#define TIMER(m) for (WATCH.start = time_ms(), WATCH.x = 0; WATCH.x != 1; WATCH.end = time_ms(), WATCH.x = 1, dump_timer((m), WATCH.start, WATCH.end))
+
 
 static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer)
 {
@@ -77,30 +105,17 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	return -1;
 }
 
-static int ignore_until(const char *type, int fd, char until)
-{
-	int rc;
-	MESSAGE msg;
-	memset(&msg, 0, sizeof(msg));
-
-	do {
-		pgr_debugf("ignoring message from %s (fd %d)", type, fd);
-		rc = pgr_msg_recv(fd, &msg);
-		pgr_msg_clear(&msg);
-		if (rc != 0) {
-			return rc;
-		}
-	} while (msg.type != until);
-
-	return 0;
-}
-
 static void handle_client(CONTEXT *c, int fd)
 {
 	int rc, i, state;
 	CONNECTION frontend, reader, writer;
-	MESSAGE msg;
-	memset(&msg, 0, sizeof(msg));
+
+	MSG *relay  = pgr_m_new();
+	MSG *buffer = pgr_m_new();
+
+	MSG *fe, *be;
+	fe = pgr_m_new();
+	be = pgr_m_new();
 
 	pgr_conn_init(c, &frontend);
 	pgr_conn_init(c, &reader);
@@ -119,128 +134,111 @@ static void handle_client(CONTEXT *c, int fd)
 
 	int befd;        /* which backend (reader / writer) is active */
 	int in_txn = 0;  /* are we in a transaction? */
-	MESSAGE  *start; /* first message buffered from frontend */
-	MESSAGE **next;  /* pointer to insertion point of next message */
-	MESSAGE  *recv;  /* working copy */
+
+	char type;
+	int len;
 
 	for (;;) {
-		start = recv = NULL;
-		next = NULL;
 		if (!in_txn) {
 			befd = reader.fd;
 		}
 
+		pgr_m_reset(relay);
 		do {
-			recv = calloc(1, sizeof(MESSAGE));
-			if (!recv) {
-				pgr_abort(ABORT_MEMFAIL);
-			}
-
-			pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
-			rc = pgr_msg_recv(frontend.fd, recv);
+			pgr_debugf("reading message from frontend (fd %d)", frontend.fd);
+			rc = pgr_m_next(relay, frontend.fd);
 			if (rc != 0) {
 				goto shutdown;
 			}
-			if (start == NULL) {
-				start = recv;
-			} else if (next != NULL && *next != NULL) {
-				*next = recv;
-			}
-			next = &recv->next;
 
-			if (recv->type == 'Q') {
-				if (strncasecmp(recv->data, "BEGIN", 5) == 0) {
+			type = pgr_m_u8_at (relay, 0);
+			len  = pgr_m_u32_at(relay, 1);
+
+			if (type == 'Q') {
+				if (len >= 4+5 && strncasecmp(pgr_m_str_at(relay,5), "begin", 5) == 0) {
 					in_txn = 1;
 					befd = writer.fd; /* force transactions to writer */
-				} else if (strncasecmp(recv->data, "COMMIT", 6) == 0) {
+				}
+				if (len >= 4+6 && strncasecmp(pgr_m_str_at(relay,5), "commit", 6) == 0) {
 					in_txn = 0;
 				}
 			}
-		} while (recv->type != 'Q' && recv->type != 'S' && recv->type != 'X');
 
-		if (recv->type == 'X') {
-			free(recv->data);
-			free(recv);
-
-			pgr_conn_terminate(&reader);
-			pgr_conn_terminate(&writer);
-			break;
-		}
-
-	relay:
-		pgr_debugf("relaying messages");
-		for (recv = start; recv != NULL; recv = recv->next) {
-			pgr_debugf("relaying message from frontend (fd %d) to %s (fd %d)",
-					frontend.fd, befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_msg_send(befd, recv);
+			pgr_debugf("relaying message to %s (fd %d)",
+					befd == reader.fd ? "reader" : "writer", befd);
+			rc = pgr_m_relay(relay, frontend.fd, befd);
 			if (rc != 0) {
 				goto shutdown;
 			}
-		}
+
+			if (type == 'X') {
+				pgr_sendn(reader.fd, "X\0\0\0\x4", 5);
+				pgr_sendn(writer.fd, "X\0\0\0\x4", 5);
+				goto shutdown;
+			}
+		} while (type != 'Q' && type != 'S');
 
 		do {
-			pgr_debugf("receiving message from %s (fd %d)",
+again:
+			pgr_debugf("reading message from %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_msg_recv(befd, &msg);
+			rc = pgr_m_next(buffer, befd);
 			if (rc != 0) {
 				goto shutdown;
 			}
 
-			if (msg.type == 'E' && strcmp(pgr_msg_ecode(&msg), "25006") == 0 && befd != writer.fd) {
-				pgr_msg_clear(&msg);
-				rc = ignore_until(befd == reader.fd ? "reader" : "writer", befd, 'Z');
-				if (rc != 0) {
-					goto shutdown;
-				}
+			type = pgr_m_u8_at (buffer, 0);
+
+			if (pgr_m_iserror(buffer, "25006") && befd == reader.fd) {
+				pgr_debugf("E25006 bad routing - ignoring remaining backend messages...");
+				pgr_m_ignore(buffer, befd, "Z");
+				pgr_debugf("done ignoring...");
 
 				befd = writer.fd;
-				goto relay;
+				pgr_debugf("resending saved messages to writer (fd %d)", befd);
+				pgr_m_resend(relay, befd);
+				goto again;
 			}
 
 			/* handle CopyInResponse by switching to sub-protocol */
-			if (msg.type == 'G') {
-				pgr_debugf("relaying message from %s (fd %d) to frontend (fd %d)",
-						befd == reader.fd ? "reader" : "writer", befd, frontend.fd);
-				rc = pgr_msg_send(frontend.fd, &msg);
-				pgr_msg_clear(&msg);
+			if (type == 'G') {
+				pgr_debugf("relaying message to frontend (fd %d)", frontend.fd);
+				rc = pgr_m_relay(buffer, befd, frontend.fd);
 				if (rc != 0) {
 					goto shutdown;
 				}
+				pgr_m_flush(buffer);
 
+				pgr_debugf("switching to COPY DATA sub-protocol");
 				do {
-					pgr_debugf("receiving message from frontend (fd %d)", frontend.fd);
-					rc = pgr_msg_recv(frontend.fd, &msg);
+					pgr_debugf("reading message from frontend (fd %d)", frontend.fd);
+					rc = pgr_m_next(buffer, frontend.fd);
 					if (rc != 0) {
 						goto shutdown;
 					}
 
-					pgr_debugf("relaying message from frontend (fd %d) to %s (fd %d)",
-							frontend.fd, befd == reader.fd ? "reader" : "writer", befd);
-					rc = pgr_msg_send(befd, &msg);
-					pgr_msg_clear(&msg);
+					type = pgr_m_u8_at (buffer, 0);
+
+					pgr_debugf("relaying message to %s (fd %d)",
+							befd == reader.fd ? "reader" : "writer", befd);
+					rc = pgr_m_relay(buffer, frontend.fd, befd);
+					pgr_m_flush(buffer);
 					if (rc != 0) {
 						goto shutdown;
 					}
-				} while (msg.type != 'c' && msg.type != 'F');
-
-			} else {
-				pgr_debugf("relaying message from %s (fd %d) to frontend (fd %d)",
-						befd == reader.fd ? "reader" : "writer", befd, frontend.fd);
-				rc = pgr_msg_send(frontend.fd, &msg);
-				pgr_msg_clear(&msg);
-				if (rc != 0) {
-					goto shutdown;
-				}
+				} while (type != 'c' && type != 'F');
+				pgr_debugf("returning to NORMAL protocol");
+				continue;
 			}
-		} while (msg.type != 'Z');
 
-		/* free all of our memory... */
-		while (start != NULL) {
-			recv = start->next;
-			free(start->data);
-			free(start);
-			start = recv;
-		}
+			pgr_debugf("relaying message to frontend (fd %d)", frontend.fd);
+			rc = pgr_m_relay(buffer, befd, frontend.fd);
+			if (rc != 0) {
+				goto shutdown;
+			}
+			pgr_m_flush(buffer);
+
+		} while (type != 'Z');
 	}
 shutdown:
 	pgr_debugf("closing all frontend and backend connections");
@@ -285,7 +283,12 @@ static void* do_worker(void *_c)
 				c->fe_conns++;
 				unlock(&c->lock, "context", 0);
 
+				pgr_msgf(stderr, "Handling new inbound client connection (fd %d)", connfd);
+				double t = time_ms();
 				handle_client(c, connfd);
+				t = time_ms() - t;
+				pgr_logf(stderr, LOG_INFO, "Client connection (fd %d) completed in %lfs",
+						connfd, t);
 
 				wrlock(&c->lock, "context", 0);
 				c->fe_conns--;

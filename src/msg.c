@@ -1,249 +1,214 @@
 #include "pgrouter.h"
+#include <assert.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+#include <fcntl.h>
 
-static int negative(int x)
+MSG* pgr_m_new()
 {
-	return x > 0 ? -1 * x : x;
+	MSG *m = calloc(1, sizeof(MSG));
+	if (!m) {
+		pgr_abort(ABORT_MEMFAIL);
+	}
+	m->free = sizeof(m->buf);
+	return m;
 }
 
-int pgr_msg_recv(int fd, MESSAGE *m)
+void pgr_m_init(MSG *m)
 {
-	errno = EIO;
+	memset(m, 0, sizeof(MSG));
+	m->free = sizeof(m->buf);
+}
+
+void pgr_m_skip(MSG *m, size_t n)
+{
+	assert(pgr_m_unread(m) >= n);
+	m->offset += n;
+}
+
+void pgr_m_discard(MSG *m, int fd)
+{
+	int len;
+	ssize_t n;
+
+	if (pgr_m_u8_at(m,0) == 0) {
+		len = pgr_m_u32_at(m,0);
+	} else {
+		len = 1 + pgr_m_u32_at(m,1);
+	}
+
+	n = pgr_m_unread(m);
+	while (len > n) {
+		/* there's more data on the wire.                 */
+		/* drop what we've got, and then go read the rest */
+		len -= n;
+
+		m->offset = 0;
+		m->free = MSG_BUFSIZ;
+		n = read(fd, m->buf, m->free);
+		if (n <= 0) {
+			return;
+		}
+	}
+
+	pgr_m_skip(m, len);
+	pgr_m_flush(m);
+}
+
+void pgr_m_flush(MSG *m)
+{
+	if (m->offset > 0 && pgr_m_unread(m) > 0) {
+		memmove(m->buf, m->buf + pgr_m_offset(m), pgr_m_unread(m));
+		m->free += m->offset;
+		m->offset = 0;
+	}
+}
+
+int pgr_m_write(MSG *m, const void *buf, size_t len)
+{
+	if (len > m->free) {
+		memcpy(m->buf + pgr_m_used(m), buf, m->free);
+		len -= m->free;
+		m->free = 0;
+		return len;
+	}
+
+	memcpy(m->buf + pgr_m_used(m), buf, len);
+	m->free -= len;
+	return 0;
+
+
+}
+
+int pgr_m_sendn(MSG *m, int fd, size_t len)
+{
 	int rc;
 
-	rc = pgr_recvn(fd, &m->type, sizeof(m->type));
+	pgr_debugf("sending %d bytes to fd %d", len, fd);
+	rc = pgr_sendn(fd, m->buf + m->offset, len);
 	if (rc != 0) {
-		return negative(rc);
+		return rc;
 	}
-	if (isuntyped(m->type)) {
-		/* legacy 'untyped' message; first 4 octets are length */
-		char size[4] = { m->type, 0, 0, 0 };
-		rc = pgr_recvn(fd, size+1, 3);
-		if (rc != 0) {
-			return negative(rc);
+
+	pgr_m_skip(m, len);
+	return 0;
+}
+
+int pgr_m_resend(MSG *m, int fd)
+{
+	pgr_m_rewind(m);
+	return pgr_m_send(m, fd);
+}
+
+int pgr_m_next(MSG *m, int fd)
+{
+	size_t n;
+
+	while (pgr_m_unread(m) < 5) {
+		n = read(fd, pgr_m_buffer(m), pgr_m_free(m));
+		if (n <= 0) {
+			return -1;
 		}
-		memcpy(&m->length, size, 4);
-
-	} else {
-		rc = pgr_recvn(fd, &m->length, 4);
-		if (rc != 0) {
-			return negative(rc);
-		}
+		m->free -= n;
 	}
-
-	m->length = ntohl(m->length);
-	if (m->length > 65536) {
-		pgr_debugf("message of %d (%#02x) octets is too long; bailing",
-				m->length, m->length);
-		return 3;
-	}
-
-	if (m->length > sizeof(m->length)) {
-		m->data = malloc(m->length - sizeof(m->length));
-		if (!m->data) {
-			return 4;
-		}
-
-		rc = pgr_recvn(fd, m->data, m->length - sizeof(m->length));
-		if (rc != 0) {
-			free(m->data);
-			return negative(rc);
-		}
-	}
-
-	if (isuntyped(m->type)) {
-		pgr_debugf("determing type from message length (%d) and payload characteristics",
-				m->length);
-
-		if (m->length >= 8) {
-			unsigned short hi16 = ((m->data[0] & 0xff) << 8) | (m->data[1] & 0xff);
-			unsigned short lo16 = ((m->data[2] & 0xff) << 8) | (m->data[3] & 0xff);
-			const char *type;
-
-			pgr_debugf("length %d and payload %02x %02x (%u) %02x %02x (%u)",
-					m->length,
-					m->data[0], m->data[1], hi16,
-					m->data[2], m->data[3], lo16);
-
-			if (hi16 == 1234 && lo16 == 5679) {
-				if (m->length == 8) {
-					m->type = MSG_SSL_REQUEST;
-					type = "SSLRequest";
-
-				} else if (m->length == 16) {
-					m->type = MSG_CANCEL_REQUEST;
-					type = "CancelRequest";
-
-				} else {
-					pgr_debugf("unrecognized untyped message");
-					return 5;
-				}
-			} else {
-				pgr_debugf("treating untyped message as a StartupMessage for protocol v%d.%d",
-						hi16, lo16);
-				m->type = MSG_STARTUP_MESSAGE;
-				type = "StartupMessage";
-			}
-
-			pgr_debugf("setting message type to [%s] (non-standard value %d [%02x])",
-					type, m->type, m->type);
-
-		} else {
-			pgr_debugf("untyped message is too short; bailing");
-			return 6;
-		}
-	}
-
-	/* auxiliary data */
-	if (m->type == 'R') {
-		m->auth.code = ntohl(*(int*)(m->data));
-
-	} else if (m->type == 'E') {
-		char **sub, *x;
-		for (sub = NULL, x = m->data; x && *x; ) {
-			switch (*x) {
-			case 'S': sub = &m->error.severity; break;
-			case 'C': sub = &m->error.sqlstate; break;
-			case 'M': sub = &m->error.message;  break;
-			case 'D': sub = &m->error.details;  break;
-			case 'H': sub = &m->error.hint;     break;
-			default:  sub = NULL; break;
-			}
-
-			x++;
-			if (sub) {
-				*sub = x;
-			}
-			x += strlen(x) + 1;
-		}
-	}
-
-	char *buf;
-	int len = htonl(m->length);
-
-	if (isuntyped(m->type)) {
-		buf = malloc(m->length);
-		memcpy(buf, &len, 4);
-		memcpy(buf+4, m->data, m->length - 4);
-
-	} else {
-		buf = malloc(1 + m->length);
-		buf[0] = m->type;
-		memcpy(buf+1, &len, 4);
-		memcpy(buf+5, m->data, m->length - 4);
-	}
-	pgr_hexdump(buf, m->length + (isuntyped(m->type) ? 0 : 1));
-	free(buf);
 
 	return 0;
 }
 
-int pgr_msg_send(int fd, MESSAGE *m)
+int pgr_m_relay(MSG *m, int from, int to)
 {
-	char *buf;
-	int rc;
-	int len = htonl(m->length);
+	size_t len = pgr_m_u32_at(m, 1) + 1;
+	size_t n   = pgr_m_unread(m);
 
-	if (isuntyped(m->type)) {
-		buf = malloc(m->length);
-		memcpy(buf, &len, 4);
-		memcpy(buf + 4, m->data, m->length - 4);
+	/* is there more to this message? */
+	while (len > pgr_m_unread(m)) {
+		len -= pgr_m_unread(m);
+		pgr_m_send(m, to);
+		pgr_m_flush(m);
+		pgr_m_next(m, from);
+	}
+	pgr_m_sendn(m, to, len);
+	pgr_m_flush(m);
 
-		rc = pgr_sendn(fd, buf, m->length);
-		free(buf);
-		return rc;
+	return 0;
+}
 
-	} else {
-		buf = malloc(1 + m->length);
-		buf[0] = m->type;
-		memcpy(buf + 1, &len, 4);
-		memcpy(buf + 5, m->data, m->length - 4);
+int pgr_m_ignore(MSG *m, int fd, const char *until)
+{
+	size_t n, len;
+	char type;
 
-		rc = pgr_sendn(fd, buf, 1 + m->length);
-		free(buf);
-		return rc;
+	for (;;) {
+		type = pgr_m_u8_at(m, 0);
+		len  = pgr_m_u32_at(m, 1) + 1;
+		n    = pgr_m_unread(m);
+
+		while (len > n) {
+			/* there's more data on the wire.                 */
+			/* send what we've got, and then go read the rest */
+			len -= n;
+
+			m->offset = 0;
+			m->free = MSG_BUFSIZ;
+			n = read(fd, m->buf, m->free);
+			if (n <= 0) {
+				return -1;
+			}
+		}
+
+		pgr_m_skip(m, len);
+		pgr_m_flush(m);
+
+		if (strchr(until, type) != NULL) {
+			return 0;
+		}
+
+		pgr_m_next(m, fd);
 	}
 }
 
-void pgr_msg_clear(MESSAGE *m)
+int pgr_m_iserror(MSG *m, const char *code)
 {
-	if (m->error.message
-	 && (m->error.message < m->data || m->error.message > m->data + m->length)) {
-		pgr_debugf("freeing error.message at %p (not in %p ... %p)",
-				m->error.message, m->data, m->data + m->length);
-		pgr_debugf("message is '%s'", m->error.message);
-		free(m->error.message);
+	if (pgr_m_u8_at(m, 0) != 'E') {
+		return 0;
 	}
-	free(m->data);
-	char type = m->type;
-	memset(m, 0, sizeof(MESSAGE));
-	m->type = type;
-}
 
-void pgr_msg_pack(MESSAGE *m)
-{
-	if (m->type == 'E') { /* ErrorResponse */
-		m->length = (1 /* type field */ + strlen(m->error.severity) + 1 /* null-terminator */)
-		          + (1 /* type field */ + strlen(m->error.sqlstate) + 1 /* null-terminator */)
-		          + (1 /* type field */ + strlen(m->error.message)  + 1 /* null-terminator */)
-		          + 4 /* length field */
-		          + 1 /* final null-terminator */;
+	char *e;
 
-		if (m->error.details != NULL) {
-			m->length += (1 /* type field */ + strlen(m->error.details)  + 1 /* null-terminator */);
+	e = pgr_m_str_at(m, 5);
+	while (*e) {
+		if (*e == 'C') {
+			e++;
+			return strcmp(e, code) == 0;
 		}
-		if (m->error.hint != NULL) {
-			m->length += (1 /* type field */ + strlen(m->error.hint)     + 1 /* null-terminator */);
-		}
-
-		m->data = malloc(m->length);
-		if (!m->data) {
-			pgr_abort(ABORT_MEMFAIL);
-		}
-
-		char *s;
-		char *p = m->data;
-
-		*p++ = 'S'; for (s = m->error.severity; *s; *p++ = *s++) ; *p++ = '\0';
-		*p++ = 'C'; for (s = m->error.sqlstate; *s; *p++ = *s++) ; *p++ = '\0';
-		*p++ = 'M'; for (s = m->error.message;  *s; *p++ = *s++) ; *p++ = '\0';
-		if (m->error.details != NULL) {
-			*p++ = 'D'; for (s = m->error.details; *s; *p++ = *s++) ; *p++ = '\0';
-		}
-		if (m->error.hint != NULL) {
-			*p++ = 'H'; for (s = m->error.hint; *s; *p++ = *s++) ; *p++ = '\0';
-		}
-		*p = '\0';
+		while (*e++)
+			;
 	}
+
+	return 0;
 }
 
-const char* pgr_msg_esev(MESSAGE *m)
+void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 {
-	return m->error.severity;
-}
-
-const char* pgr_msg_ecode(MESSAGE *m)
-{
-	return m->error.sqlstate;
-}
-
-const char* pgr_msg_emsg(MESSAGE *m)
-{
-	return m->error.message;
-}
-
-void pgr_msg_err(MESSAGE *m, char *sev, char *code, char *msg, ...)
-{
+	int len;
 	va_list ap;
+	char *msg;
 
-	m->type = 'E';
-	m->error.severity = sev;
-	m->error.sqlstate = code;
-
-	va_start(ap, msg);
-	vasprintf(&m->error.message, msg, ap);
+	va_start(ap, msgf);
+	vasprintf(&msg, msgf, ap);
 	va_end(ap);
+
+	len = 1+4                /* type + len            */
+	    + 1+strlen(sev)+1    /* 'S' + severity + '\0' */
+	    + 1+strlen(code)+1   /* 'C' + code     + '\0' */
+	    + 1+strlen(msg)+1    /* 'M' + msg      + '\0' */
+	    + 1;                 /* trailing '\0'         */
+	len = htonl(len);
+	pgr_m_write(m, "E",  1); pgr_m_write(m, &len, 4);
+	pgr_m_write(m, "S",  1); pgr_m_write(m, sev,  strlen(sev)  + 1);
+	pgr_m_write(m, "C",  1); pgr_m_write(m, code, strlen(code) + 1);
+	pgr_m_write(m, "M",  1); pgr_m_write(m, msg,  strlen(msg)  + 1);
+	pgr_m_write(m, "\0", 1);
 }

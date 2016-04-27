@@ -6,6 +6,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <fcntl.h>
 
 static int negative(int x)
@@ -202,6 +203,14 @@ int pgr_listen4(const char *ep, int backlog)
 		return -1;
 	}
 
+	/* set TCP_NODELAY to disable nagle */
+	int ena = 1;
+	rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &ena, sizeof(ena));
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to set TCP_NODELAY (expect slowness): %s (errno %d)",
+				strerror(errno), errno);
+	}
+
 	pgr_debugf("binding / listening on fd %d", fd);
 	return bind_and_listen(ep, (struct sockaddr*)(&sa), fd, backlog);
 }
@@ -221,6 +230,14 @@ int pgr_listen6(const char *ep, int backlog)
 		pgr_logf(stderr, LOG_ERR, "failed to create an ipv6 socket for [%s]: %s (errno %d)",
 				ep, strerror(errno), errno);
 		return -1;
+	}
+
+	/* set TCP_NODELAY to disable nagle */
+	int ena = 1;
+	rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &ena, sizeof(ena));
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to set TCP_NODELAY (expect slowness): %s (errno %d)",
+				strerror(errno), errno);
 	}
 
 	pgr_debugf("binding / listening on fd %d", fd);
@@ -253,6 +270,14 @@ int pgr_connect(const char *host, int port, int timeout_ms)
 		return -1;
 	}
 
+	/* set TCP_NODELAY to disable nagle */
+	int ena = 1;
+	rc = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &ena, sizeof(ena));
+	if (rc != 0) {
+		pgr_logf(stderr, LOG_ERR, "failed to set TCP_NODELAY (expect slowness): %s (errno %d)",
+				strerror(errno), errno);
+	}
+
 	switch (type) {
 	case 4: rc = connect(fd, (struct sockaddr*)(&ipv4), sizeof(ipv4)); break;
 	case 6: rc = connect(fd, (struct sockaddr*)(&ipv6), sizeof(ipv6)); break;
@@ -274,7 +299,6 @@ int pgr_sendn(int fd, const void *buf, size_t n)
 {
 	ssize_t nwrit;
 	const void *p = buf;
-	pgr_hexdump(buf, n);
 	while (n > 0) {
 		nwrit = write(fd, p, n);
 		if (nwrit <= 0) {
