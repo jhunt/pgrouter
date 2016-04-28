@@ -29,7 +29,7 @@ slaves) and replication delay (to detect unsuitable slaves).
 
 Here's a diagram.
 
-<img src="https://raw.githubusercontent.com/jhunt/pgrouter/master/docs/web/arch.png">
+<img src="https://raw.githubusercontent.com/jhunt/pgrouter/master/doc/web/arch.png">
 
 Client applications then connect directly to the `pgrouter`
 process, on the ports _it_ binds, as if it were a regular
@@ -166,5 +166,11 @@ particular order):
   and happen to be still-connected when a slave goes away or
   starts to lag, or gets promoted.
 
+License
+-------
+
+`pgrouter` is released under the [MIT license][mit].
+
 
 [pg-sr]: https://wiki.postgresql.org/wiki/Streaming_Replication
+[mit]:   https://github.com/jhunt/pgrouter/blob/master/LICENSE
