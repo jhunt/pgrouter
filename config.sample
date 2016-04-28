@@ -11,9 +11,9 @@ tls {
   key  /path/to/pem
 }
 
-user  vcap
-group vcap
-pidfile /var/vcap/sys/run/pgrouter/pgrouter.pid
+user  vagrant
+group vagrant
+pidfile /tmp/pid.pid.pidfile
 authdb passwd.sample
 log INFO
 

@@ -158,9 +158,6 @@ particular order):
 - **Logging** - Needs to be smoothed out to ensure that it
   provides the most value to operators of a pgrouter installation.
 - **Benchmarks** - Need more formal and rigorous testing.
-- **Operationalization** - The daemon doesn't actually daemonize.
-  This is kind of a big deal, but easy to fix.  It also doesn't
-  drop privileges, which can also be problematic.
 - **Long-lived Connections** - Currently, we don't handle cases
   where clients leave connections open for long periods of time
   and happen to be still-connected when a slave goes away or

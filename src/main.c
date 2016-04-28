@@ -19,6 +19,11 @@
 #include <getopt.h>
 #include <signal.h>
 #include <errno.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <pwd.h>
+#include <grp.h>
 
 #define SUBSYS "super"
 #include "locks.inc.c"
@@ -51,6 +56,183 @@ static void do_shutdown(THREADSET *threads)
 	for (i = 0; i < threads->n; i++) {
 		pthread_join(threads->workers[i], &ret);
 	}
+}
+
+static void inform_parent(int fd, const char *fmt, ...)
+{
+	ssize_t n;
+	char error[8192];
+	va_list ap;
+
+	va_start(ap, fmt);
+	vsnprintf(error, sizeof(error), fmt, ap);
+	va_end(ap);
+
+	n = write(fd, error, strlen(error));
+	if (n < 0) {
+		perror("failed to inform parent of our error condition");
+	}
+	if (n < strlen(error)) {
+		fprintf(stderr, "child->parent inform - only wrote %li of %li bytes\n",
+			n, strlen(error));
+	}
+}
+
+static void daemonize(const char *pidfile, const char *user, const char *group)
+{
+	int rc, fd = -1;
+	size_t n;
+
+	umask(0);
+	if (pidfile) {
+		fd = open(pidfile, O_RDWR|O_CREAT, S_IRUSR|S_IWUSR);
+		if (fd == -1) {
+			perror(pidfile);
+			exit(2);
+		}
+	}
+
+	errno=0;
+	struct passwd *pw = getpwnam(user);
+	if (!pw) {
+		fprintf(stderr, "Failed to look up user '%s': %s\n",
+				user, (errno == 0 ? "user not found" : strerror(errno)));
+		exit(2);
+	}
+
+	errno = 0;
+	struct group *gr = getgrnam(group);
+	if (!gr) {
+		fprintf(stderr, "Failed to look up group '%s': %s\n",
+				group, (errno == 0 ? "group not found" : strerror(errno)));
+		exit(2);
+	}
+
+	/* chdir to fs root to avoid tying up mountpoints */
+	rc = chdir("/");
+	if (rc != 0) {
+		fprintf(stderr, "Failed to change directory to /: %s\n",
+				strerror(errno));
+		exit(2);
+	}
+
+	/* child -> parent error communication pipe */
+	int pfds[2];
+	rc = pipe(pfds);
+	if (rc != 0) {
+		fprintf(stderr, "Failed to create communication pipe: %s\n",
+				strerror(errno));
+		exit(2);
+	}
+
+	/* fork */
+	pid_t pid = fork();
+	if (pid < 0) {
+		fprintf(stderr, "Failed to fork child process: %s\n",
+				strerror(errno));
+		exit(2);
+	}
+
+	if (pid > 0) {
+		close(pfds[1]);
+		char buf[8192];
+		while ( (n = read(pfds[0], buf, 8192)) > 0) {
+			buf[n] = '\0';
+			fprintf(stderr, "%s", buf);
+		}
+		exit(0);
+	}
+	close(pfds[0]);
+	char error[8192];
+
+	if (pidfile) {
+		struct flock lock;
+		size_t n;
+
+		lock.l_type   = F_WRLCK;
+		lock.l_whence = SEEK_SET;
+		lock.l_start  = 0;
+		lock.l_len    = 0; /* whole file */
+
+		rc = fcntl(fd, F_SETLK, &lock);
+		if (rc == -1) {
+			snprintf(error, 8192, "Failed to acquire lock on %s.%s\n",
+					pidfile,
+					(errno == EACCES || errno == EAGAIN
+						? "  Is another copy running?"
+						: strerror(errno)));
+			n = write(pfds[1], error, strlen(error));
+			if (n < 0)
+				perror("failed to inform parent of our error condition");
+			if (n < strlen(error))
+				fprintf(stderr, "child->parent inform - only wrote %li of %li bytes\n",
+					(long)n, (long)strlen(error));
+			exit(2);
+		}
+	}
+
+	/* leave session group, lose the controlling term */
+	rc = (int)setsid();
+	if (rc == -1) {
+		inform_parent(pfds[1], "Failed to drop controlling terminal: %s\n",
+				strerror(errno));
+		exit(2);
+	}
+
+	if (pidfile) {
+		/* write the pid file */
+		char buf[8];
+		snprintf(buf, 8, "%i\n", getpid());
+		n = write(fd, buf, strlen(buf));
+		if (n < 0)
+			perror("failed to write PID to pidfile");
+		if (n < strlen(buf))
+			fprintf(stderr, "only wrote %li of %li bytes to pidfile\n",
+				(long)n, (long)strlen(error));
+		fsync(fd);
+
+		if (getuid() == 0) {
+			/* chmod the pidfile, so it can be removed */
+			rc = fchown(fd, pw->pw_uid, gr->gr_gid);
+			if (rc != 0) {
+				inform_parent(pfds[1], "Failed to change user/groupd ownership of pidfile %s: %s\n",
+						pidfile, strerror(errno));
+				unlink(pidfile);
+				exit(2);
+			}
+		}
+	}
+
+	if (getuid() == 0) {
+		/* set UID/GID */
+		if (gr->gr_gid != getgid()) {
+			rc = setgid(gr->gr_gid);
+			if (rc != 0) {
+				inform_parent(pfds[1], "Failed to switch to group '%s': %s\n",
+						group, strerror(errno));
+				unlink(pidfile);
+				exit(2);
+			}
+		}
+		if (pw->pw_uid != getuid()) {
+			rc = setuid(pw->pw_uid);
+			if (rc != 0) {
+				inform_parent(pfds[1], "Failed to switch to user '%s': %s\n",
+						user, strerror(errno));
+				unlink(pidfile);
+				exit(2);
+			}
+		}
+	}
+
+	/* redirect standard IO streams to/from /dev/null */
+	if (!freopen("/dev/null", "r", stdin))
+		perror("Failed to reopen stdin </dev/null");
+	if (!freopen("/dev/null", "w", stdout))
+		perror("Failed to reopen stdout >/dev/null");
+	if (!freopen("/dev/null", "w", stderr))
+		perror("Failed to reopen stderr >/dev/null");
+	close(pfds[1]);
 }
 
 int main(int argc, char **argv)
@@ -109,8 +291,6 @@ int main(int argc, char **argv)
 	}
 
 	pgr_logf(stderr, LOG_INFO, "pgrouter starting up");
-	pgr_logf(stderr, LOG_ERR,  "NOTE: the -F option is currently ignored; "
-	                           "pgrouter ALWAYS runs in the foreground!"); /* FIXME */
 
 	CONTEXT c;
 	memset(&c, 0, sizeof(c));
@@ -131,6 +311,10 @@ int main(int argc, char **argv)
 		pgr_logf(stderr, LOG_ERR, "failed to initialize authdb: %s (errno %d)",
 				strerror(errno), errno);
 		return 3;
+	}
+
+	if (!foreground) {
+		daemonize(c.startup.pidfile, c.startup.user, c.startup.group);
 	}
 
 	pgr_logf(stderr, LOG_INFO, "[super] binding frontend to %s", c.startup.frontend);
