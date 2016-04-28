@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <pthread.h>
 
 #define SUBSYS "worker"
@@ -292,13 +293,36 @@ static void* do_worker(void *_c)
 
 		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
 			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
-				connfd = accept(watch[i], NULL, NULL);
+				double t;
+				char remote_addr[INET6_ADDRSTRLEN+1];
+				struct sockaddr_storage peer;
+				int peer_len = sizeof(peer);
+
+				connfd = accept(watch[i], (struct sockaddr*)&peer, &peer_len);
 				wrlock(&c->lock, "context", 0);
 				c->fe_conns++;
 				unlock(&c->lock, "context", 0);
 
+				switch (peer.ss_family) {
+				case AF_INET:
+					memset(remote_addr, 0, sizeof(remote_addr));
+					pgr_logf(stderr, LOG_INFO, "[worker] inbound connection from %s:%d",
+							inet_ntop(AF_INET, &((struct sockaddr_in*)&peer)->sin_addr,
+								remote_addr, sizeof(remote_addr)),
+								((struct sockaddr_in*)&peer)->sin_port);
+					break;
+
+				case AF_INET6:
+					memset(remote_addr, 0, sizeof(remote_addr));
+					pgr_logf(stderr, LOG_INFO, "[worker] inbound connection from %s:%d",
+							inet_ntop(AF_INET6, &((struct sockaddr_in6*)&peer)->sin6_addr,
+								remote_addr, sizeof(remote_addr)),
+								((struct sockaddr_in6*)&peer)->sin6_port);
+					break;
+				}
+
 				pgr_msgf(stderr, "Handling new inbound client connection (fd %d)", connfd);
-				double t = time_ms();
+				t = time_ms();
 				handle_client(c, connfd);
 				t = time_ms() - t;
 				pgr_logf(stderr, LOG_INFO, "Client connection (fd %d) completed in %lfs",

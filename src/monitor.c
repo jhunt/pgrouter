@@ -71,8 +71,6 @@ static void* do_monitor(void *_c)
 	int watch[2] = { c->monitor4, c->monitor6 };
 	fd_set rfds;
 
-	/* FIXME: we should pass a new sockaddr to accept() and log about remote clients */
-
 	for (;;) {
 		FD_ZERO(&rfds);
 		nfds = 0;
@@ -96,7 +94,28 @@ static void* do_monitor(void *_c)
 
 		for (i = 0; i < sizeof(watch)/sizeof(watch[0]); i++) {
 			if (watch[i] >= 0 && FD_ISSET(watch[i], &rfds)) {
-				connfd = accept(watch[i], NULL, NULL);
+				char remote_addr[INET6_ADDRSTRLEN+1];
+				struct sockaddr_storage peer;
+				int peer_len = sizeof(peer);
+
+				connfd = accept(watch[i], (struct sockaddr*)&peer, &peer_len);
+				switch (peer.ss_family) {
+				case AF_INET:
+					memset(remote_addr, 0, sizeof(remote_addr));
+					pgr_logf(stderr, LOG_INFO, "[monitor] inbound connection from %s:%d",
+							inet_ntop(AF_INET, &((struct sockaddr_in*)&peer)->sin_addr,
+								remote_addr, sizeof(remote_addr)),
+								((struct sockaddr_in*)&peer)->sin_port);
+					break;
+
+				case AF_INET6:
+					memset(remote_addr, 0, sizeof(remote_addr));
+					pgr_logf(stderr, LOG_INFO, "[monitor] inbound connection from %s:%d",
+							inet_ntop(AF_INET6, &((struct sockaddr_in6*)&peer)->sin6_addr,
+								remote_addr, sizeof(remote_addr)),
+								((struct sockaddr_in6*)&peer)->sin6_port);
+					break;
+				}
 				handle_client(c, connfd);
 				close(connfd);
 			}
