@@ -75,9 +75,9 @@ void pgr_m_flush(MSG *m)
 {
 	if (m->offset > 0 && pgr_m_unread(m) > 0) {
 		memmove(m->buf, m->buf + pgr_m_offset(m), pgr_m_unread(m));
-		m->free += m->offset;
-		m->offset = 0;
 	}
+	m->free += m->offset;
+	m->offset = 0;
 }
 
 int pgr_m_write(MSG *m, const void *buf, size_t len)
