@@ -306,18 +306,18 @@ static void* do_worker(void *_c)
 				switch (peer.ss_family) {
 				case AF_INET:
 					memset(remote_addr, 0, sizeof(remote_addr));
+					inet_ntop(AF_INET, &((struct sockaddr_in*)&peer)->sin_addr,
+						remote_addr, sizeof(remote_addr)),
 					pgr_logf(stderr, LOG_INFO, "[worker] inbound connection from %s:%d",
-							inet_ntop(AF_INET, &((struct sockaddr_in*)&peer)->sin_addr,
-								remote_addr, sizeof(remote_addr)),
-								((struct sockaddr_in*)&peer)->sin_port);
+							remote_addr, ((struct sockaddr_in*)&peer)->sin_port);
 					break;
 
 				case AF_INET6:
 					memset(remote_addr, 0, sizeof(remote_addr));
+					inet_ntop(AF_INET6, &((struct sockaddr_in6*)&peer)->sin6_addr,
+						remote_addr, sizeof(remote_addr)),
 					pgr_logf(stderr, LOG_INFO, "[worker] inbound connection from %s:%d",
-							inet_ntop(AF_INET6, &((struct sockaddr_in6*)&peer)->sin6_addr,
-								remote_addr, sizeof(remote_addr)),
-								((struct sockaddr_in6*)&peer)->sin6_port);
+							remote_addr, ((struct sockaddr_in6*)&peer)->sin6_port);
 					break;
 				}
 
