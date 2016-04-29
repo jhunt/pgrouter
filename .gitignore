@@ -38,5 +38,6 @@ build/*
 /t/authdbtest
 /t/authtest
 /t/cfgtest
+/t/driver
 /t/md5test
 /pgrouter
