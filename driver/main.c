@@ -14,6 +14,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <libpq-fe.h>
 
 #define TEST_SKIPPED 0
@@ -36,6 +37,7 @@ static int load_schema(PGconn*);
 
 static int test_simple_select(PGconn*);
 static int test_simple_insert(PGconn*);
+static int test_large_insert(PGconn*);
 
 typedef int (*test_runner)(PGconn*);
 static struct {
@@ -45,6 +47,7 @@ static struct {
 } TESTS[] = {
 	{ "Simple SELECT", test_simple_select, 0 },
 	{ "Simple INSERT", test_simple_insert, 0 },
+	{ "Large Payload INSERT", test_large_insert, 0 },
 };
 
 int main(int argc, char **argv)
@@ -186,4 +189,27 @@ static int test_simple_insert(PGconn *conn)
 	}
 
 	return TEST_OK;
+}
+
+static int test_large_insert(PGconn *conn)
+{
+	/* `INSERT INTO notes (id, note) VALUES (3, '')` is 43 characters long */
+	char *sql = malloc(65536); /* 64k */
+	long unsigned int i;
+
+	for (i = 1 << 8; i <= 65536; i = i << 1) {
+		fprintf(stderr, "Testing a %lub SQL INSERT\n", i);
+
+		fprintf(stderr, "Deleting previous note record #3...\n");
+		if (!COMMAND_QUERY(conn, "DELETE FROM notes WHERE id = 3")) {
+			return TEST_FAIL;
+		}
+
+		memcpy(sql, "INSERT INTO notes (id, note) VALUES (3, '", 41);
+		memset(sql+41, 'a', i - 44);
+		memcpy(sql+41+(i-44), "')", 3);
+		if (!COMMAND_QUERY(conn, sql)) {
+			return TEST_FAIL;
+		}
+	}
 }
