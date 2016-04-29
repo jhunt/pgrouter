@@ -99,6 +99,7 @@ int pgr_m_write(MSG *m, const void *buf, size_t len)
 int pgr_m_sendn(MSG *m, int fd, size_t len)
 {
 	int rc;
+	assert(len != 0);
 
 	pgr_debugf("sending %d bytes to fd %d", len, fd);
 	rc = pgr_sendn(fd, m->buf + m->offset, len);
