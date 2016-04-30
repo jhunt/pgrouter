@@ -40,4 +40,5 @@ build/*
 /t/cfgtest
 /t/driver
 /t/md5test
+/t/msgtest
 /pgrouter

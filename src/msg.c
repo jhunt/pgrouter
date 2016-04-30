@@ -227,3 +227,110 @@ void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 	pgr_m_write(m, "M",  1); pgr_m_write(m, msg,  strlen(msg)  + 1);
 	pgr_m_write(m, "\0", 1);
 }
+
+#ifdef PTEST
+#include <strings.h>
+
+#define so(s,x) do {\
+	errno = 0; \
+	if (x) { \
+		fprintf(stderr, "%s ... OK\n", s); \
+	} else { \
+		fprintf(stderr, "FAIL: %s [!(%s)]\n", s, #x); \
+		if (errno != 0) { \
+			fprintf(stderr, "%s (errno %d)\n", strerror(errno), errno); \
+		} \
+		exit(1); \
+	} \
+} while (0)
+
+#define m_should_be(s,m,offset,unread,used,free) do {\
+	so(s ", offset should be " #offset, pgr_m_offset(m) == offset); \
+	so(s ", unread should be " #unread, pgr_m_unread(m) == unread); \
+	so(s ", used should be "   #used,   pgr_m_used(m) == used); \
+	so(s ", free should be "   #free,   pgr_m_free(m) == free); \
+} while (0)
+
+#define msg_should_be(s,m,type,len) do {\
+	so(s ", message type should be " #type, pgr_m_u8_at(m,0) == (type)); \
+	so(s ", length should be "       #len,  pgr_m_u32_at(m,1) == (len)); \
+} while (0)
+
+#define writeok(f,s,n) so("writing " #n " bytes to fd `" #f "`", \
+		write((f), (s), (n)) == (n))
+
+#define ok(x)    so(#x " should succeed", (x) == 0)
+#define notok(x) so(#x " should fail", (x) != 0)
+
+#define null(x)    so(#x " should be NULL", (x) == NULL)
+#define notnull(x) so(#x " should not be NULL", (x) != NULL)
+
+int main(int argc, char **argv)
+{
+	int rc, in, out;
+	MSG *m;
+	FILE *inf, *outf;
+
+	int i;
+	char *s;
+
+	inf = tmpfile();
+	outf = tmpfile();
+	if (inf == NULL || outf == NULL) {
+		fprintf(stderr, "tmpfile() call failed: %s (errno %d)\n", strerror(errno), errno);
+		exit(1);
+	}
+	in = fileno(inf);
+	out = fileno(outf);
+
+	m = pgr_m_new();
+	so("pgr_m_new() yields a valid pointer", m != NULL);
+	m_should_be("initial MSG", m, 0, 0, 0, MSG_BUFSIZ);
+
+#define STR28 "seilohp3Eel7iesheik0sheing3d"
+	writeok(in, "x\0\0\0\x8" "abcd", 9);
+	writeok(in, "y\0\0\0\x21" STR28 "\0", 34);
+	lseek(in, 0, SEEK_SET);
+
+	ok(pgr_m_next(m, in));
+	m_should_be("after pgr_m_next", m, 0, 9+34, 9+34, MSG_BUFSIZ-9-34);
+	msg_should_be("after pgr_m_next", m, 'x', 8);
+	so("message data should be \"abcd\"", memcmp(pgr_m_str_at(m, 5), "abcd", 4) == 0);
+	pgr_m_discard(m, in);
+
+	ok(pgr_m_next(m, in));
+	m_should_be   ("next message", m, 0, 34, 34, MSG_BUFSIZ-34);
+	msg_should_be ("next message", m, 'y', 33);
+	so("message data should be \"" STR28 "\"", memcmp(pgr_m_str_at(m, 5), STR28, 28) == 0);
+	pgr_m_discard(m, in);
+
+	notok(pgr_m_next(m, in));
+#undef STR28
+
+	ftruncate(in, 0);
+	lseek(in, 0, SEEK_SET);
+	writeok(in, "L\0\0\x80\x0", 5);
+	notnull(s = malloc(0x8000));
+	memset(s, '.', 0x8000);
+	writeok(in, s, 0x8000);
+	so("first message should be larger than 16k", lseek(in, 0, SEEK_CUR) > MSG_BUFSIZ);
+	writeok(in, "S\0\0\0\x4", 5);
+	lseek(in, 0, SEEK_SET);
+
+	ok(pgr_m_next(m, in));
+	m_should_be("large message", m, 0, MSG_BUFSIZ, MSG_BUFSIZ, 0);
+	msg_should_be("large message", m, 'L', 0x8000);
+	pgr_m_discard(m, in);
+	m_should_be("post-discard", m, 0, 0, 0, MSG_BUFSIZ);
+
+	ok(pgr_m_next(m, in));
+	m_should_be("small message", m, 0, 5, 5, MSG_BUFSIZ-5);
+	msg_should_be("small message", m, 'S', 5);
+
+	fclose(inf);
+	fclose(outf);
+
+	printf("PASS\n");
+	return 0;
+}
+#endif
