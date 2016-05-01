@@ -171,12 +171,19 @@ typedef struct {
 	int fd;
 } CONNECTION;
 
+#define MSG_STARTUP 1
+#define MSG_SSLREQ  2
+#define MSG_CANCEL  3
+
 #define MBUF_SAME_FD -2
 #define MBUF_NO_FD   -1
+
 typedef struct {
 	int     infd;  /* file descripto ro read from      */
 	int     outfd; /* file descriptor to write to      */
+	int     cache; /* cache file descriptor (overflow) */
 
+	size_t  start; /* offset of next available message */
 	size_t  fill;  /* offset for next read/write op    */
 	size_t  len;   /* total length of allocated buffer */
 	uint8_t buf[]; /* the buffer, in all its glory...  */
@@ -193,6 +200,11 @@ MBUF* pgr_mbuf_new(size_t len);
    descriptor, specify `MBUF_NO_FD`. */
 int pgr_mbuf_setfd(MBUF *m, int in, int out);
 
+/* Concatenate caller-supplied buffer contents onto
+   the end of our buffer.  Doesn't support messages
+   that are too big to fit in the buffer */
+int pgr_mbuf_cat(MBUF *m, const void *buf, size_t len);
+
 /* Fill as much of the buffer with octets read from
    the input file descriptor.  If the buffer already
    contains enough data to see the first 5 octets of
@@ -206,6 +218,10 @@ int pgr_mbuf_recv(MBUF *m);
    i.e. INSERT statements with large blobs), this may
    require reading from the input file descriptor. */
 int pgr_mbuf_send(MBUF *m);
+
+/* Resend all buffered message for which we've
+   buffered data (i.e. via pgr_mbuf_send) */
+int pgr_mbuf_resend(MBUF *m);
 
 /* Relay the first message in the buffer to the output
    file descriptor, and reposition the buffer at the

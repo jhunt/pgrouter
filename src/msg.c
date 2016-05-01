@@ -228,23 +228,42 @@ void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 	pgr_m_write(m, "\0", 1);
 }
 
+static int tmpfd()
+{
+	FILE *f = tmpfile();
+	if (!f) {
+		return -1;
+	}
+	return fileno(f);
+}
+
+#define available(m) ((m)->fill - (m)->start)
+#define u16(v) ((uint16_t)((*(v)&0xff)<<8)|*((v)+1)&0xff)
+#define u32(v) ((uint16_t)((*(v)&0xff)<<24)|((*((v)+1)&0xff)<<16)|((*((v)+2)&0xff)<<8)|(*((v)+3)&0xff))
+
 static unsigned int size(MBUF *m)
 {
-	if (m->fill < 5) {
+	if (available(m) < 5) {
 		return 0;
 	}
 
-	if (m->buf[0] == 0) {
-		return (m->buf[0] << 24)
-		     | (m->buf[1] << 16)
-		     | (m->buf[2] <<  8)
-		     | (m->buf[3]);
+	if (m->buf[m->start + 0] == 0) {
+		return u32(m->buf + m->start);
 	}
-	return ((m->buf[1] << 24)
-	      | (m->buf[2] << 16)
-	      | (m->buf[3] <<  8)
-	      | (m->buf[4]))
-	      + 1; /* for the type! */
+	return u32(m->buf + m->start + 1) + 1;
+}
+
+static ssize_t writen(int fd, const void *buf, size_t len)
+{
+	ssize_t n;
+	while (len > 0) {
+		n = write(fd, buf, len);
+		if (n <= 0) {
+			return n;
+		}
+		len -= n;
+	}
+	return n;
 }
 
 /* Generate a new MBUF structure of the given size,
@@ -257,7 +276,10 @@ MBUF* pgr_mbuf_new(size_t len)
 		pgr_abort(ABORT_MEMFAIL);
 	}
 	memset(m, 0, sizeof(MBUF) + len);
+	/* keep track of our size */
 	m->len = len;
+	/* invalidate all the fds */
+	m->infd = m->outfd = m->cache = -1;
 	return m;
 }
 
@@ -280,6 +302,20 @@ int pgr_mbuf_setfd(MBUF *m, int in, int out)
 	return 0;
 }
 
+/* Concatenate caller-supplied buffer contents onto
+   the end of our buffer.  Doesn't support messages
+   that are too big to fit in the buffer */
+int pgr_mbuf_cat(MBUF *m, const void *buf, size_t len)
+{
+	if (len > m->len - m->fill) {
+		return 1;
+	}
+
+	memcpy(m->buf + m->fill, buf, len);
+	m->fill += len;
+	return 0;
+}
+
 /* Fill as much of the buffer with octets read from
    the input file descriptor.  If the buffer already
    contains enough data to see the first 5 octets of
@@ -287,14 +323,14 @@ int pgr_mbuf_setfd(MBUF *m, int in, int out)
    immediately. */
 int pgr_mbuf_recv(MBUF *m)
 {
-	while (m->fill < 5) {
+	while (available(m) < 5) {
 		ssize_t n = read(m->infd, m->buf + m->fill, m->len - m->fill);
 		if (n <= 0) {
 			return (int)n;
 		}
 		m->fill += n;
 	}
-	return m->fill;
+	return available(m);
 }
 
 /* Send the first message in the buffer to the output
@@ -304,6 +340,107 @@ int pgr_mbuf_recv(MBUF *m)
    require reading from the input file descriptor. */
 int pgr_mbuf_send(MBUF *m)
 {
+	int wr_ok, cache_ok;
+	unsigned int len;
+	ssize_t n, off;
+
+	if (available(m) < 5) {
+		return 1;
+	}
+
+	wr_ok = 1;
+	len = size(m);
+	while (len > available(m)) {
+		if (m->cache < 0) {
+			/* time to warm up the cache */
+			m->cache = tmpfd();
+			if (m->cache < 0) { /* still! */
+				return 1;
+			}
+
+			if (m->start > 0) {
+				n = writen(m->cache, m->buf, m->start);
+				if (n <= 0) {
+					return 1;
+				}
+				memmove(m->buf, m->buf + m->start, m->fill - m->start);
+				m->fill -= m->start;
+				m->start = 0;
+			}
+		}
+		n = writen(m->outfd, m->buf + m->start, available(m));
+		wr_ok = (n > 0);
+
+		n = writen(m->cache, m->buf + m->start, available(m));
+		if (n <= 0) {
+			return 1;
+		}
+
+		len -= available(m);
+		m->fill = m->start;
+
+		n = read(m->infd, m->buf + m->fill, m->len - m->fill);
+		if (n <= 0) {
+			return n;
+		}
+		m->fill += n;
+	}
+
+	if (len > 0) {
+		n = writen(m->outfd, m->buf + m->start, len);
+		wr_ok = (n > 0);
+
+		if (m->cache >= 0) {
+			n = writen(m->cache, m->buf + m->start, len);
+			if (n <= 0) {
+				return 1;
+			}
+
+			memmove(m->buf + m->start, m->buf + m->start + len, m->fill - m->start - len);
+			m->fill -= len;
+
+		} else {
+			m->start += len;
+		}
+	}
+
+	return wr_ok ? 0 : 1;
+}
+
+/* Resend all buffered message for which we've
+   buffered data (i.e. via pgr_mbuf_send) */
+int pgr_mbuf_resend(MBUF *m)
+{
+	size_t until;
+	ssize_t n;
+
+	if (m->cache >= 0) {
+		char *block = malloc(2048);
+		off_t offset = lseek(m->cache, 0, SEEK_CUR);
+		lseek(m->cache, 0, SEEK_SET);
+		while (offset > 0) {
+			n = read(m->cache, block, 2048);
+			if (n <= 0) {
+				return 1;
+			}
+			offset -= n;
+			n = writen(m->outfd, block, n);
+			if (n <= 0) {
+				return 1;
+			}
+		}
+	}
+
+	until = m->start;
+	m->start = 0; /* FIXME: naïve */
+
+	while (until > m->start) {
+		n = write(m->outfd, m->buf + m->start, until - m->start);
+		if (n <= 0) {
+			return 1;
+		}
+		m->start += n;
+	}
 	return 0;
 }
 
@@ -316,27 +453,26 @@ int pgr_mbuf_relay(MBUF *m)
 	int len, wr_ok;
 	ssize_t n, off;
 
-	if (m->fill < 5) {
+	if (available(m) < 5) {
 		return 1;
 	}
 
 	wr_ok = 1;
 	len = size(m);
-	while (len > m->fill) {
-		off = 0;
+	while (len > available(m)) {
+		off = m->start;
 		while (wr_ok && off < m->fill) {
-			fprintf(stderr, "writing %lib to outfd %d\n", m->fill - off, m->outfd);
 			n = write(m->outfd, m->buf + off, m->fill - off);
 			wr_ok = (n > 0);
 			off += n;
 		}
 
-		len -= m->fill;
-		m->fill = 0;
+		len -= available(m);
+		m->fill = m->start;
 
-		n = read(m->infd, m->buf, m->len);
+		n = read(m->infd, m->buf + m->fill, m->len - m->fill);
 		if (n <= 0) {
-			return (int)n;
+			return 1;
 		}
 		m->fill += n;
 	}
@@ -344,15 +480,15 @@ int pgr_mbuf_relay(MBUF *m)
 	if (len > 0) {
 		off = 0;
 		while (wr_ok && off < len) {
-			n = write(m->outfd, m->buf + off, (len - off));
+			n = write(m->outfd, m->buf + m->start + off, (len - off));
 			wr_ok = (n > 0);
 			off += n;
 		}
 
-		memmove(m->buf, m->buf + len, m->fill - len);
+		memmove(m->buf + m->start, m->buf + m->start + len, m->fill - m->start - len);
 		m->fill -= len;
 	}
-	return 0;
+	return wr_ok ? 0 : 1;
 }
 
 /* Discard all buffered data for the current message,
@@ -363,16 +499,16 @@ int pgr_mbuf_discard(MBUF *m)
 	int len;
 	ssize_t n;
 
-	if (m->fill < 5) {
+	if (available(m) < 5) {
 		return 1;
 	}
 
 	len = size(m);
-	while (len > m->fill) {
-		len -= m->fill;
-		m->fill = 0;
+	while (len > available(m)) {
+		len -= available(m);
+		m->fill = m->start;
 
-		n = read(m->infd, m->buf, m->len);
+		n = read(m->infd, m->buf + m->fill, m->len - m->fill);
 		if (n <= 0) {
 			return (int)n;
 		}
@@ -380,7 +516,7 @@ int pgr_mbuf_discard(MBUF *m)
 	}
 
 	if (len > 0) {
-		memmove(m->buf, m->buf + len, m->fill - len);
+		memmove(m->buf + m->start, m->buf + m->start + len, m->fill - m->start - len);
 		m->fill -= len;
 	}
 
@@ -389,31 +525,49 @@ int pgr_mbuf_discard(MBUF *m)
 
 char pgr_mbuf_msgtype(MBUF *m)
 {
-	if (m->fill == 0) {
+	if (available(m) == 0) {
 		return -1;
 	}
-	return m->buf[0];
+	if (m->buf[m->start] == 0) {
+		/* untyped message */
+		unsigned int len = pgr_mbuf_msglength(m);
+		if (len == 4 && available(m) >= 8
+		 && u16(m->buf + m->start + 4) == 1234
+		 && u16(m->buf + m->start + 6) == 5679) {
+			return MSG_SSLREQ;
+
+		} else if (len == 12) {
+			return MSG_CANCEL;
+
+		} else if (len >= 5) {
+			return MSG_STARTUP;
+		}
+
+		return -1;
+	}
+	return m->buf[m->start];
 }
 
 unsigned int pgr_mbuf_msglength(MBUF *m)
 {
 	/* FIXME: doesn't handle untyped messages! */
-	if (m->fill < 5) {
+	if (available(m) < 5) {
 		return 0;
 	}
 
-	return (m->buf[1] << 24)
-	     | (m->buf[2] << 16)
-	     | (m->buf[3] <<  8)
-	     | (m->buf[4]);
+	if (m->buf[m->start] == 0) {
+		/* untyped message */
+		return u32(m->buf + m->start) - 4;
+	}
+	return u32(m->buf + m->start + 1) - 4;
 }
 
 void* pgr_mbuf_data(MBUF *m)
 {
-	if (m->fill < 5) {
+	if (available(m) < 5) {
 		return NULL;
 	}
-	return m->buf + 5;
+	return m->buf + m->start + 5;
 }
 
 #ifdef PTEST
@@ -442,6 +596,33 @@ void* pgr_mbuf_data(MBUF *m)
 #define writeok(f,s,n) so("writing " #n " bytes to fd `" #f "`", \
 		write((f), (s), (n)) == (n))
 
+#define diagfile(f) do {\
+	off_t __o, __i; char *__s; \
+	__o = lseek((f), 0, SEEK_CUR); \
+	fprintf(stderr, "DIAG> fd %d is %lib long\n", (f), __o); \
+	notnull(__s = malloc(__o)); \
+	lseek((f), 0, SEEK_SET); \
+	is(read((f), __s, __o), __o); \
+	for (__i = 0; __i < __o; __i++) { \
+		fprintf(stderr, "%s%02x ", __i % 16 == 0 ? "\n" : "", __s[__i] & 0xff); \
+	}\
+	fprintf(stderr, "\n"); \
+	free(__s); \
+	lseek((f), __o, SEEK_SET); \
+} while (0)
+
+#define fileok(f,x,n) do {\
+	size_t __n; off_t __o; char *__s; \
+	__n = (n); \
+	notnull(__s = malloc(__n + 1)); \
+	__o = lseek((f), 0, SEEK_CUR); \
+	lseek((f), 0, SEEK_SET); \
+	is(read((f), __s, __n + 1), __n); \
+	ok(memcmp(__s, (x), __n)); \
+	free(__s); \
+	lseek((f), __o, SEEK_SET); \
+} while (0)
+
 #define m_should_be(s,m,offset,unread,used,free) do {\
 	so(s ", offset should be " #offset, pgr_m_offset(m) == offset); \
 	so(s ", unread should be " #unread, pgr_m_unread(m) == unread); \
@@ -459,26 +640,57 @@ void* pgr_mbuf_data(MBUF *m)
 	so(s ", message length should be " #l, pgr_mbuf_msglength(m) == (l)); \
 } while (0)
 
-int main(int argc, char **argv)
+MBUF *m;
+int in, out;
+
+static void init_test()
 {
-	int rc, in, out;
-	MBUF *m;
 	FILE *inf, *outf;
 
-	int i;
-	char *s;
-
-	inf = tmpfile();
-	outf = tmpfile();
-	if (inf == NULL || outf == NULL) {
-		fprintf(stderr, "tmpfile() call failed: %s (errno %d)\n", strerror(errno), errno);
-		exit(1);
-	}
+	notnull(inf = tmpfile());
 	in = fileno(inf);
+
+	notnull(outf = tmpfile());
 	out = fileno(outf);
 
 	notnull(m = pgr_mbuf_new(512));
 	ok(pgr_mbuf_setfd(m, in, out));
+}
+
+static void reset_test()
+{
+	char *s;
+
+	m->fill = 0;
+
+	ftruncate(in, 0);
+	lseek(in, 0, SEEK_SET);
+	writeok(in, "\0\0\0\x08\x04\xd2\x16\x2f", 8); /* SSLRequest */
+	writeok(in, "\0\0\0\x09\x00\x03\x00\x00\x00", 9); /* StartupMessage */
+	writeok(in, "I\0\0\0\x04", 5);
+	writeok(in, "Q\0\0\0\x25"
+	            "Do you know the way to San Jose?\0", 38);
+	writeok(in, "L\0\0\x80\x04", 5);
+	notnull(s = malloc(0x8000));
+	memset(s, '.', 0x8000);
+	writeok(in, s, 0x8000);
+	free(s);
+
+	writeok(in, "S\0\0\0\x4", 5);
+	lseek(in, 0, SEEK_SET);
+
+	ftruncate(out, 0);
+	lseek(out, 0, SEEK_SET);
+	lseek(out, 0, SEEK_SET);
+}
+
+int main(int argc, char **argv)
+{
+	int i;
+	char *s;
+
+	init_test();
+
 	so("initial fill offset should be 0", m->fill == 0);
 	so("discarding with an empty buffer returns an error",
 			pgr_mbuf_discard(m) != 0);
@@ -489,104 +701,131 @@ int main(int argc, char **argv)
 	so("interrogating message data from an empty buffer returns NULL",
 			pgr_mbuf_data(m) == NULL);
 
-#define RESET() do {\
-	ftruncate(in, 0); lseek(in, 0, SEEK_SET); \
-	ftruncate(out, 0); lseek(out, 0, SEEK_SET); \
-	m->fill = 0; \
-} while (0)
-
-	/***   Read & Discard   ****************************************************/
-	RESET();
-	writeok(in, "x\0\0\0\x8" "abcd", 9);
-	writeok(in, "y\0\0\0\x21" "abcdefghijklmnopqrstuvwxyz!!" "\0", 34);
-	lseek(in, 0, SEEK_SET);
-
-	is(pgr_mbuf_recv(m), 9+34);
-	so("mbuf fill offset should be 9+34", m->fill == 9+34);
-	msg_is("for first message", m, 'x', 8);
-	ok(memcmp(pgr_mbuf_data(m), "abcd", 4));
+	 /********************************************************/
+	/** Discard                                            **/
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #1", m, MSG_SSLREQ, 4);
 
 	ok(pgr_mbuf_discard(m));
-	so("mbuf fill offset should be 34", m->fill == 34);
-
-	is(pgr_mbuf_recv(m), 34);
-	so("mbuf fill offset should be 34", m->fill == 34);
-	msg_is("for second message", m, 'y', 33);
-	ok(memcmp(pgr_mbuf_data(m), "abcdefghijklmnopqrstuvwxyz!!", 28));
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #2", m, MSG_STARTUP, 5);
 
 	ok(pgr_mbuf_discard(m));
-	so("mbuf fill offset should be 0", m->fill == 0);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #3", m, 'I', 0);
 
-	is(pgr_mbuf_recv(m), 0); /* eof */
+	ok(pgr_mbuf_discard(m));
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #4", m, 'Q', 33);
+	ok(memcmp(pgr_mbuf_data(m), "Do you know the way to San Jose?", 33));
 
-	/***   Read & Relay   ******************************************************/
-	RESET();
-	writeok(in, "A\0\0\0\x9" "FIRST",  10);
-	writeok(in, "B\0\0\0\xa" "SECOND", 11);
-	lseek(in, 0, SEEK_SET);
+	ok(pgr_mbuf_discard(m));
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #5", m, 'L', 0x8000);
 
-	is(pgr_mbuf_recv(m), 10+11);
+	ok(pgr_mbuf_discard(m));
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #6", m, 'S', 0);
+
+	ok(pgr_mbuf_discard(m));
+	so("eof", pgr_mbuf_recv(m) == 0);
+
+	 /********************************************************/
+	/** Relay                                              **/
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
 	ok(pgr_mbuf_relay(m));
-	lseek(out, 0, SEEK_SET);
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f", 8);
 
-	notnull(s = malloc(1024));
-	is(read(out, s, 1024), 10);
-	ok(memcmp(s, "A\0\0\0\x9" "FIRST", 10));
-	free(s);
-
-	msg_is("after relay of first message", m, 'B', 10);
-
-
-
-	/***   Read & Discard (LARGE MESSAGES)   ***********************************/
-	RESET();
-	writeok(in, "L\0\0\x80\x04", 5);
-	notnull(s = malloc(0x8000));
-	memset(s, '.', 0x8000);
-	writeok(in, s, 0x8000);
-	free(s);
-	so("first message should be larger than buffer", lseek(in, 0, SEEK_CUR) > m->len);
-
-	writeok(in, "S\0\0\0\x4", 5);
-	lseek(in, 0, SEEK_SET);
-
-	is(pgr_mbuf_recv(m), m->len);
-	msg_is("for large message", m, 'L', 0x8004);
-
-	ok(pgr_mbuf_discard(m));
-	so("mbuf fill offset should be 5", m->fill == 5);
-
-	is(pgr_mbuf_recv(m), m->fill);
-	msg_is("after discarding large message", m, 'S', 4);
-
-
-
-	/***   Read & Relay (LARGE MESSAGES)   *************************************/
-	RESET();
-	writeok(in, "L\0\0\x80\x04", 5);
-	notnull(s = malloc(0x8000));
-	memset(s, '.', 0x8000);
-	writeok(in, s, 0x8000);
-	free(s);
-	so("first message should be larger than buffer", lseek(in, 0, SEEK_CUR) > m->len);
-
-	writeok(in, "S\0\0\0\x4", 5);
-	lseek(in, 0, SEEK_SET);
-
-	is(pgr_mbuf_recv(m), m->len);
-	msg_is("for large message", m, 'L', 0x8004);
+	msg_is("after relaying SSLRequest message", m, MSG_STARTUP, 5);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
 	ok(pgr_mbuf_relay(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00", 8+9);
+
+	msg_is("after relaying StartupMessage message", m, 'I', 0);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_relay(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00"
+	            "I\0\0\0\4", 8+9+5);
+
+	msg_is("after relaying 'I' message", m, 'Q', 33);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_relay(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00"
+	            "I\0\0\0\4"
+	            "Q\0\0\0\x25" "Do you know the way to San Jose?\0", 8+9+5+38);
+
+	msg_is("after relaying 'Q' message", m, 'L', 0x8000);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_relay(m));
+	so("all of the L message was relayed",
+			lseek(out, 0, SEEK_CUR) == 8+9+5+38+0x8000+5);
+
+	msg_is("after relaying 'L' message", m, 'S', 0);
+
+	 /********************************************************/
+	/* Resend                                               */
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_send(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f", 8);
+
+	msg_is("after sending SSLRequest message", m, MSG_STARTUP, 5);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_send(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00", 8+9);
+
+	msg_is("after sending StartupMessage message", m, 'I', 0);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_send(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00"
+	            "I\0\0\0\4", 8+9+5);
+
+	msg_is("after sending 'I' message", m, 'Q', 33);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_send(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00"
+	            "I\0\0\0\4"
+	            "Q\0\0\0\x25" "Do you know the way to San Jose?\0", 8+9+5+38);
+
+	/* do the resend */
+	ftruncate(out, 0);
 	lseek(out, 0, SEEK_SET);
+	ok(pgr_mbuf_resend(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "\0\0\0\x09\x00\x03\x00\x00\x00"
+	            "I\0\0\0\4"
+	            "Q\0\0\0\x25" "Do you know the way to San Jose?\0", 8+9+5+38);
 
-	notnull(s = malloc(0x8005));
-	is(read(out, s, 0x8005), 0x8005);
-	ok(memcmp(s, "L\0\0\x80\x04", 5));
-	free(s);
+	msg_is("after sending 'Q' message", m, 'L', 0x8000);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_send(m));
+	so("all of the L message was sent",
+			lseek(out, 0, SEEK_CUR) == 8+9+5+38+0x8000+5);
 
-	msg_is("after relay of first message", m, 'S', 4);
+	ftruncate(out, 0);
+	lseek(out, 0, SEEK_SET);
+	ok(pgr_mbuf_resend(m));
+	so("all of the L message was resent",
+			lseek(out, 0, SEEK_CUR) == 8+9+5+38+0x8000+5);
 
-	fclose(inf);
-	fclose(outf);
+	msg_is("after sending 'L' message", m, 'S', 0);
+
+	 /********************************************************/
+	/* Concatenate                                          */
+	reset_test();
+	pgr_mbuf_cat(m, "Q\0\0\0\x12" "SELECT THINGS\0", 19);
+	ok(pgr_mbuf_relay(m));
+	fileok(out, "Q\0\0\0\x12" "SELECT THINGS\0", 19);
+
+	/********************************************************/
 
 	printf("PASS\n");
 	return 0;
