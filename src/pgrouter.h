@@ -171,6 +171,57 @@ typedef struct {
 	int fd;
 } CONNECTION;
 
+#define MBUF_SAME_FD -2
+#define MBUF_NO_FD   -1
+typedef struct {
+	int     infd;  /* file descripto ro read from      */
+	int     outfd; /* file descriptor to write to      */
+
+	size_t  fill;  /* offset for next read/write op    */
+	size_t  len;   /* total length of allocated buffer */
+	uint8_t buf[]; /* the buffer, in all its glory...  */
+} MBUF;
+
+/* Generate a new MBUF structure of the given size,
+   allocated on the heap. The `len` argument must be
+   at least 16 (octets). */
+MBUF* pgr_mbuf_new(size_t len);
+
+/* Set the input and output file descriptors to the
+   passed values.  To leave existing fd untouched,
+   specify the constant `MBUF_SAME_FD`.  To unset a
+   descriptor, specify `MBUF_NO_FD`. */
+int pgr_mbuf_setfd(MBUF *m, int in, int out);
+
+/* Fill as much of the buffer with octets read from
+   the input file descriptor.  If the buffer already
+   contains enough data to see the first 5 octets of
+   a message, this call does nothing and returns
+   immediately. */
+int pgr_mbuf_recv(MBUF *m);
+
+/* Send the first message in the buffer to the output
+   file descriptor, buffering all data sent, so that
+   it can be resent later.  For very large messages,
+   i.e. INSERT statements with large blobs), this may
+   require reading from the input file descriptor. */
+int pgr_mbuf_send(MBUF *m);
+
+/* Relay the first message in the buffer to the output
+   file descriptor, and reposition the buffer at the
+   beginning of the next message.  This may lead to an
+   empty buffer. */
+int pgr_mbuf_relay(MBUF *m);
+
+/* Discard all buffered data for the current message,
+   reading (and discarding) from the input descriptor
+   if necessary. */
+int pgr_mbuf_discard(MBUF *m);
+
+char pgr_mbuf_msgtype(MBUF *m);
+unsigned int pgr_mbuf_msglength(MBUF *m);
+void* pgr_mbuf_data(MBUF *m);
+
 #define MSG_BUFSIZ 16384
 
 typedef struct {

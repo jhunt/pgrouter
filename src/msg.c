@@ -228,6 +228,194 @@ void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 	pgr_m_write(m, "\0", 1);
 }
 
+static unsigned int size(MBUF *m)
+{
+	if (m->fill < 5) {
+		return 0;
+	}
+
+	if (m->buf[0] == 0) {
+		return (m->buf[0] << 24)
+		     | (m->buf[1] << 16)
+		     | (m->buf[2] <<  8)
+		     | (m->buf[3]);
+	}
+	return ((m->buf[1] << 24)
+	      | (m->buf[2] << 16)
+	      | (m->buf[3] <<  8)
+	      | (m->buf[4]))
+	      + 1; /* for the type! */
+}
+
+/* Generate a new MBUF structure of the given size,
+   allocated on the heap. The `len` argument must be
+   at least 16 (octets). */
+MBUF* pgr_mbuf_new(size_t len)
+{
+	MBUF *m = malloc(sizeof(MBUF) + len);
+	if (!m) {
+		pgr_abort(ABORT_MEMFAIL);
+	}
+	memset(m, 0, sizeof(MBUF) + len);
+	m->len = len;
+	return m;
+}
+
+/* Set the input and output file descriptors to the
+   passed values.  To leave existing fd untouched,
+   specify the constant `MBUF_SAME_FD`.  To unset a
+   descriptor, specify `MBUF_NO_FD`. */
+int pgr_mbuf_setfd(MBUF *m, int in, int out)
+{
+	assert(m != NULL);
+	assert(in == MBUF_SAME_FD || in == MBUF_NO_FD || in >= 0);
+	assert(out == MBUF_SAME_FD || out == MBUF_NO_FD || out >= 0);
+
+	if (in != MBUF_SAME_FD) {
+		m->infd = in;
+	}
+	if (out != MBUF_SAME_FD) {
+		m->outfd = out;
+	}
+	return 0;
+}
+
+/* Fill as much of the buffer with octets read from
+   the input file descriptor.  If the buffer already
+   contains enough data to see the first 5 octets of
+   a message, this call does nothing and returns
+   immediately. */
+int pgr_mbuf_recv(MBUF *m)
+{
+	while (m->fill < 5) {
+		ssize_t n = read(m->infd, m->buf + m->fill, m->len - m->fill);
+		if (n <= 0) {
+			return (int)n;
+		}
+		m->fill += n;
+	}
+	return m->fill;
+}
+
+/* Send the first message in the buffer to the output
+   file descriptor, buffering all data sent, so that
+   it can be resent later.  For very large messages,
+   i.e. INSERT statements with large blobs), this may
+   require reading from the input file descriptor. */
+int pgr_mbuf_send(MBUF *m)
+{
+	return 0;
+}
+
+/* Relay the first message in the buffer to the output
+   file descriptor, and reposition the buffer at the
+   beginning of the next message.  This may lead to an
+   empty buffer. */
+int pgr_mbuf_relay(MBUF *m)
+{
+	int len, wr_ok;
+	ssize_t n, off;
+
+	if (m->fill < 5) {
+		return 1;
+	}
+
+	wr_ok = 1;
+	len = size(m);
+	while (len > m->fill) {
+		off = 0;
+		while (wr_ok && off < m->fill) {
+			fprintf(stderr, "writing %lib to outfd %d\n", m->fill - off, m->outfd);
+			n = write(m->outfd, m->buf + off, m->fill - off);
+			wr_ok = (n > 0);
+			off += n;
+		}
+
+		len -= m->fill;
+		m->fill = 0;
+
+		n = read(m->infd, m->buf, m->len);
+		if (n <= 0) {
+			return (int)n;
+		}
+		m->fill += n;
+	}
+
+	if (len > 0) {
+		off = 0;
+		while (wr_ok && off < len) {
+			n = write(m->outfd, m->buf + off, (len - off));
+			wr_ok = (n > 0);
+			off += n;
+		}
+
+		memmove(m->buf, m->buf + len, m->fill - len);
+		m->fill -= len;
+	}
+	return 0;
+}
+
+/* Discard all buffered data for the current message,
+   reading (and discarding) from the input descriptor
+   if necessary. */
+int pgr_mbuf_discard(MBUF *m)
+{
+	int len;
+	ssize_t n;
+
+	if (m->fill < 5) {
+		return 1;
+	}
+
+	len = size(m);
+	while (len > m->fill) {
+		len -= m->fill;
+		m->fill = 0;
+
+		n = read(m->infd, m->buf, m->len);
+		if (n <= 0) {
+			return (int)n;
+		}
+		m->fill += n;
+	}
+
+	if (len > 0) {
+		memmove(m->buf, m->buf + len, m->fill - len);
+		m->fill -= len;
+	}
+
+	return 0;
+}
+
+char pgr_mbuf_msgtype(MBUF *m)
+{
+	if (m->fill == 0) {
+		return -1;
+	}
+	return m->buf[0];
+}
+
+unsigned int pgr_mbuf_msglength(MBUF *m)
+{
+	/* FIXME: doesn't handle untyped messages! */
+	if (m->fill < 5) {
+		return 0;
+	}
+
+	return (m->buf[1] << 24)
+	     | (m->buf[2] << 16)
+	     | (m->buf[3] <<  8)
+	     | (m->buf[4]);
+}
+
+void* pgr_mbuf_data(MBUF *m)
+{
+	if (m->fill < 5) {
+		return NULL;
+	}
+	return m->buf + 5;
+}
+
 #ifdef PTEST
 #include <strings.h>
 
@@ -236,13 +424,23 @@ void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 	if (x) { \
 		fprintf(stderr, "%s ... OK\n", s); \
 	} else { \
-		fprintf(stderr, "FAIL: %s [!(%s)]\n", s, #x); \
+		fprintf(stderr, "%s:%d: FAIL: %s [!(%s)]\n", __FILE__, __LINE__, s, #x); \
 		if (errno != 0) { \
 			fprintf(stderr, "%s (errno %d)\n", strerror(errno), errno); \
 		} \
 		exit(1); \
 	} \
 } while (0)
+
+#define is(x,n)    so(#x " should equal " #n, (x) == (n))
+#define isnt(x,n)  so(#x " should not equal " #n, (x) == (n))
+#define ok(x)      so(#x " should succeed", (x) == 0)
+#define notok(x)   so(#x " should fail", (x) != 0)
+#define null(x)    so(#x " should be NULL", (x) == NULL)
+#define notnull(x) so(#x " should not be NULL", (x) != NULL)
+
+#define writeok(f,s,n) so("writing " #n " bytes to fd `" #f "`", \
+		write((f), (s), (n)) == (n))
 
 #define m_should_be(s,m,offset,unread,used,free) do {\
 	so(s ", offset should be " #offset, pgr_m_offset(m) == offset); \
@@ -256,19 +454,15 @@ void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
 	so(s ", length should be "       #len,  pgr_m_u32_at(m,1) == (len)); \
 } while (0)
 
-#define writeok(f,s,n) so("writing " #n " bytes to fd `" #f "`", \
-		write((f), (s), (n)) == (n))
-
-#define ok(x)    so(#x " should succeed", (x) == 0)
-#define notok(x) so(#x " should fail", (x) != 0)
-
-#define null(x)    so(#x " should be NULL", (x) == NULL)
-#define notnull(x) so(#x " should not be NULL", (x) != NULL)
+#define msg_is(s,m,t,l) do { \
+	so(s ", message type should be "   #t, pgr_mbuf_msgtype(m) == (t)); \
+	so(s ", message length should be " #l, pgr_mbuf_msglength(m) == (l)); \
+} while (0)
 
 int main(int argc, char **argv)
 {
 	int rc, in, out;
-	MSG *m;
+	MBUF *m;
 	FILE *inf, *outf;
 
 	int i;
@@ -283,49 +477,113 @@ int main(int argc, char **argv)
 	in = fileno(inf);
 	out = fileno(outf);
 
-	m = pgr_m_new();
-	so("pgr_m_new() yields a valid pointer", m != NULL);
-	m_should_be("initial MSG", m, 0, 0, 0, MSG_BUFSIZ);
+	notnull(m = pgr_mbuf_new(512));
+	ok(pgr_mbuf_setfd(m, in, out));
+	so("initial fill offset should be 0", m->fill == 0);
+	so("discarding with an empty buffer returns an error",
+			pgr_mbuf_discard(m) != 0);
+	so("interrogating message type from an empty buffer returns an error",
+			pgr_mbuf_msgtype(m) == -1);
+	so("interrogating message length from an empty buffer returns a zero-length",
+			pgr_mbuf_msglength(m) == 0);
+	so("interrogating message data from an empty buffer returns NULL",
+			pgr_mbuf_data(m) == NULL);
 
-#define STR28 "seilohp3Eel7iesheik0sheing3d"
+#define RESET() do {\
+	ftruncate(in, 0); lseek(in, 0, SEEK_SET); \
+	ftruncate(out, 0); lseek(out, 0, SEEK_SET); \
+	m->fill = 0; \
+} while (0)
+
+	/***   Read & Discard   ****************************************************/
+	RESET();
 	writeok(in, "x\0\0\0\x8" "abcd", 9);
-	writeok(in, "y\0\0\0\x21" STR28 "\0", 34);
+	writeok(in, "y\0\0\0\x21" "abcdefghijklmnopqrstuvwxyz!!" "\0", 34);
 	lseek(in, 0, SEEK_SET);
 
-	ok(pgr_m_next(m, in));
-	m_should_be("after pgr_m_next", m, 0, 9+34, 9+34, MSG_BUFSIZ-9-34);
-	msg_should_be("after pgr_m_next", m, 'x', 8);
-	so("message data should be \"abcd\"", memcmp(pgr_m_str_at(m, 5), "abcd", 4) == 0);
-	pgr_m_discard(m, in);
+	is(pgr_mbuf_recv(m), 9+34);
+	so("mbuf fill offset should be 9+34", m->fill == 9+34);
+	msg_is("for first message", m, 'x', 8);
+	ok(memcmp(pgr_mbuf_data(m), "abcd", 4));
 
-	ok(pgr_m_next(m, in));
-	m_should_be   ("next message", m, 0, 34, 34, MSG_BUFSIZ-34);
-	msg_should_be ("next message", m, 'y', 33);
-	so("message data should be \"" STR28 "\"", memcmp(pgr_m_str_at(m, 5), STR28, 28) == 0);
-	pgr_m_discard(m, in);
+	ok(pgr_mbuf_discard(m));
+	so("mbuf fill offset should be 34", m->fill == 34);
 
-	notok(pgr_m_next(m, in));
-#undef STR28
+	is(pgr_mbuf_recv(m), 34);
+	so("mbuf fill offset should be 34", m->fill == 34);
+	msg_is("for second message", m, 'y', 33);
+	ok(memcmp(pgr_mbuf_data(m), "abcdefghijklmnopqrstuvwxyz!!", 28));
 
-	ftruncate(in, 0);
+	ok(pgr_mbuf_discard(m));
+	so("mbuf fill offset should be 0", m->fill == 0);
+
+	is(pgr_mbuf_recv(m), 0); /* eof */
+
+	/***   Read & Relay   ******************************************************/
+	RESET();
+	writeok(in, "A\0\0\0\x9" "FIRST",  10);
+	writeok(in, "B\0\0\0\xa" "SECOND", 11);
 	lseek(in, 0, SEEK_SET);
-	writeok(in, "L\0\0\x80\x0", 5);
+
+	is(pgr_mbuf_recv(m), 10+11);
+	ok(pgr_mbuf_relay(m));
+	lseek(out, 0, SEEK_SET);
+
+	notnull(s = malloc(1024));
+	is(read(out, s, 1024), 10);
+	ok(memcmp(s, "A\0\0\0\x9" "FIRST", 10));
+	free(s);
+
+	msg_is("after relay of first message", m, 'B', 10);
+
+
+
+	/***   Read & Discard (LARGE MESSAGES)   ***********************************/
+	RESET();
+	writeok(in, "L\0\0\x80\x04", 5);
 	notnull(s = malloc(0x8000));
 	memset(s, '.', 0x8000);
 	writeok(in, s, 0x8000);
-	so("first message should be larger than 16k", lseek(in, 0, SEEK_CUR) > MSG_BUFSIZ);
+	free(s);
+	so("first message should be larger than buffer", lseek(in, 0, SEEK_CUR) > m->len);
+
 	writeok(in, "S\0\0\0\x4", 5);
 	lseek(in, 0, SEEK_SET);
 
-	ok(pgr_m_next(m, in));
-	m_should_be("large message", m, 0, MSG_BUFSIZ, MSG_BUFSIZ, 0);
-	msg_should_be("large message", m, 'L', 0x8000);
-	pgr_m_discard(m, in);
-	m_should_be("post-discard", m, 0, 0, 0, MSG_BUFSIZ);
+	is(pgr_mbuf_recv(m), m->len);
+	msg_is("for large message", m, 'L', 0x8004);
 
-	ok(pgr_m_next(m, in));
-	m_should_be("small message", m, 0, 5, 5, MSG_BUFSIZ-5);
-	msg_should_be("small message", m, 'S', 5);
+	ok(pgr_mbuf_discard(m));
+	so("mbuf fill offset should be 5", m->fill == 5);
+
+	is(pgr_mbuf_recv(m), m->fill);
+	msg_is("after discarding large message", m, 'S', 4);
+
+
+
+	/***   Read & Relay (LARGE MESSAGES)   *************************************/
+	RESET();
+	writeok(in, "L\0\0\x80\x04", 5);
+	notnull(s = malloc(0x8000));
+	memset(s, '.', 0x8000);
+	writeok(in, s, 0x8000);
+	free(s);
+	so("first message should be larger than buffer", lseek(in, 0, SEEK_CUR) > m->len);
+
+	writeok(in, "S\0\0\0\x4", 5);
+	lseek(in, 0, SEEK_SET);
+
+	is(pgr_mbuf_recv(m), m->len);
+	msg_is("for large message", m, 'L', 0x8004);
+	ok(pgr_mbuf_relay(m));
+	lseek(out, 0, SEEK_SET);
+
+	notnull(s = malloc(0x8005));
+	is(read(out, s, 0x8005), 0x8005);
+	ok(memcmp(s, "L\0\0\x80\x04", 5));
+	free(s);
+
+	msg_is("after relay of first message", m, 'S', 4);
 
 	fclose(inf);
 	fclose(outf);
