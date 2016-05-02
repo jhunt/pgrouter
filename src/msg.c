@@ -287,7 +287,7 @@ MBUF* pgr_mbuf_new(size_t len)
    passed values.  To leave existing fd untouched,
    specify the constant `MBUF_SAME_FD`.  To unset a
    descriptor, specify `MBUF_NO_FD`. */
-int pgr_mbuf_setfd(MBUF *m, int in, int out)
+void pgr_mbuf_setfd(MBUF *m, int in, int out)
 {
 	assert(m != NULL);
 	assert(in == MBUF_SAME_FD || in == MBUF_NO_FD || in >= 0);
@@ -299,7 +299,6 @@ int pgr_mbuf_setfd(MBUF *m, int in, int out)
 	if (out != MBUF_SAME_FD) {
 		m->outfd = out;
 	}
-	return 0;
 }
 
 /* Concatenate caller-supplied buffer contents onto
@@ -654,7 +653,7 @@ static void init_test()
 	out = fileno(outf);
 
 	notnull(m = pgr_mbuf_new(512));
-	ok(pgr_mbuf_setfd(m, in, out));
+	pgr_mbuf_setfd(m, in, out);
 }
 
 static void reset_test()

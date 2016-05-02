@@ -198,7 +198,7 @@ MBUF* pgr_mbuf_new(size_t len);
    passed values.  To leave existing fd untouched,
    specify the constant `MBUF_SAME_FD`.  To unset a
    descriptor, specify `MBUF_NO_FD`. */
-int pgr_mbuf_setfd(MBUF *m, int in, int out);
+void pgr_mbuf_setfd(MBUF *m, int in, int out);
 
 /* Concatenate caller-supplied buffer contents onto
    the end of our buffer.  Doesn't support messages
