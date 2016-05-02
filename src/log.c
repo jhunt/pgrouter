@@ -160,6 +160,6 @@ void pgr_hexdump_irl(const void *buf, size_t len)
 			hex[x*3+1] = xdig[(c & 0x0f)];
 			asc[x] = isprint(c) ? c : '.';
 		}
-		pgr_debugf("%08lo | %s | %s", y, hex, asc);
+		pgr_debugf("%#08x | %s | %s", y, hex, asc);
 	}
 }

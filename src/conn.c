@@ -139,7 +139,6 @@ static int extract_params(CONNECTION *c, MBUF *m)
 
 		/* extract out 'user' and 'database' */
 		if (strcmp((*p)->name, "user") == 0) {
-			pgr_debugf("recognized 'user' parameter; extracting");
 			c->username = (*p)->value;
 			c->pwhash = pgr_auth_find(c->context, c->username);
 			if (c->pwhash == NULL) {
@@ -151,7 +150,6 @@ static int extract_params(CONNECTION *c, MBUF *m)
 			}
 
 		} else if (strcmp((*p)->name, "database") == 0) {
-			pgr_debugf("recognized 'database' parameter; extracting");
 			c->database = (*p)->value;
 		}
 

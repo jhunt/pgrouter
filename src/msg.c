@@ -20,6 +20,7 @@
 #include <errno.h>
 #include <fcntl.h>
 
+#define min(a,b) ((a) > (b) ? (b) : (a))
 #define available(m) ((m)->fill - (m)->start)
 #define u16(v) ((uint16_t)((*(v)&0xff)<<8)|*((v)+1)&0xff)
 #define u32(v) ((uint16_t)((*(v)&0xff)<<24)|((*((v)+1)&0xff)<<16)|((*((v)+2)&0xff)<<8)|(*((v)+3)&0xff))
