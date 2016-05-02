@@ -94,6 +94,30 @@ void pgr_mbuf_setfd(MBUF *m, int in, int out)
 	}
 }
 
+/* Reset the message buffer to its empty state. */
+void pgr_mbuf_reset(MBUF *m)
+{
+	m->start = m->fill = 0;
+	if (m->cache >= 0) {
+		close(m->cache);
+		m->cache = -1;
+	}
+}
+
+/* Dump important parts of the MBUF structure to
+   standard error, if we are in debugging mode. */
+void pgr_mbuf_dump(MBUF *m)
+{
+	pgr_debugf("mbuf %p (buf %p) infd %d, outfd %d, cache %d, start %d (%p), "
+		"fill %d (%p), len %d",
+		m, m->buf, m->infd, m->outfd, m->cache, m->start, m->buf + m->start,
+		m->fill,  m->buf + m->fill, m->len);
+	if (m->start != m->fill) {
+		pgr_hexdump(m->buf + m->start,
+			min(m->fill - m->start, size(m)));
+	}
+}
+
 /* Concatenate caller-supplied buffer contents onto
    the end of our buffer.  Doesn't support messages
    that are too big to fit in the buffer */
@@ -122,6 +146,8 @@ int pgr_mbuf_recv(MBUF *m)
 		}
 		m->fill += n;
 	}
+	pgr_debugf("received message from infd %d", m->infd);
+	pgr_mbuf_dump(m);
 	return available(m);
 }
 
@@ -139,6 +165,9 @@ int pgr_mbuf_send(MBUF *m)
 	if (available(m) < 5) {
 		return 1;
 	}
+
+	pgr_debugf("sending message %d -> %d", m->infd, m->outfd);
+	pgr_mbuf_dump(m);
 
 	wr_ok = 1;
 	len = size(m);
@@ -252,6 +281,9 @@ int pgr_mbuf_relay(MBUF *m)
 		return 1;
 	}
 
+	pgr_debugf("relaying message to from %d -> %d", m->infd, m->outfd);
+	pgr_mbuf_dump(m);
+
 	wr_ok = 1;
 	len = size(m);
 	while (len > available(m)) {
@@ -332,11 +364,14 @@ int pgr_mbuf_drain(MBUF *m, char until)
 		}
 
 		pgr_mbuf_discard(m);
-		pgr_mbuf_recv(m);
 
+		pgr_debugf("discarding %c (%02x) message", isprint(type) ? type : '.', type);
 		if (type == until) {
+			pgr_debugf("exiting");
 			return 0;
 		}
+
+		pgr_mbuf_recv(m);
 	}
 }
 
@@ -716,9 +751,9 @@ int main(int argc, char **argv)
 
 	msg_is("after relaying SSLRequest message", m, MSG_STARTUP, 5);
 	ok(pgr_mbuf_drain(m, 'L'));
-
-	fprintf(stderr, "m is at %c (%u)\n", pgr_mbuf_msgtype(m), pgr_mbuf_msglength(m));
 	msg_is("after draining to 'L' message", m, 'S', 0);
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("after recv (after draining to 'L' message)", m, 'S', 0);
 	ok(pgr_mbuf_relay(m));
 
 	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"

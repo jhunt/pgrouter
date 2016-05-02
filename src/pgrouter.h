@@ -200,6 +200,13 @@ MBUF* pgr_mbuf_new(size_t len);
    descriptor, specify `MBUF_NO_FD`. */
 void pgr_mbuf_setfd(MBUF *m, int in, int out);
 
+/* Reset the message buffer to its empty state. */
+void pgr_mbuf_reset(MBUF *m);
+
+/* Dump important parts of the MBUF structure to
+   standard error, if we are in debugging mode. */
+void pgr_mbuf_dump(MBUF *m);
+
 /* Concatenate caller-supplied buffer contents onto
    the end of our buffer.  Doesn't support messages
    that are too big to fit in the buffer */

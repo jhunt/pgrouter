@@ -275,7 +275,7 @@ int pgr_conn_connect(CONNECTION *c)
 	for (;;) {
 		pgr_debugf("waiting for message from backend (fd %d)", c->fd);
 		rc = pgr_mbuf_recv(m);
-		if (rc != 0) {
+		if (rc < 0) {
 			return rc;
 		}
 
@@ -344,13 +344,14 @@ int pgr_conn_accept(CONNECTION *c)
 	MBUF *m;
 
 	m = pgr_mbuf_new(512);
+	pgr_mbuf_setfd(m, c->fd, c->fd);
 
 	/* receive all messages from client */
 	for (;;) {
 		pgr_debugf("awaiting message from connection %p (fd %d)", c, c->fd);
 		rc = pgr_mbuf_recv(m);
-		if (rc != 0) {
-			return rc;
+		if (rc < 0) {
+			return -1;
 		}
 
 		type = pgr_mbuf_msgtype(m);
@@ -391,6 +392,7 @@ int pgr_conn_accept(CONNECTION *c)
 		case 'p': /* PasswordMessage */
 			pgr_debugf("received PasswordMessage");
 			rc = check_auth(c, m);
+			pgr_mbuf_discard(m);
 			if (rc != 0) {
 				error_response(m, "ERROR", "28P01",
 						"password authentication failed for user \"%s\"", c->username);

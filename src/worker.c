@@ -160,7 +160,7 @@ static void handle_client(CONTEXT *c, int fd)
 		do {
 			pgr_debugf("reading message from frontend");
 			rc = pgr_mbuf_recv(fe);
-			if (rc != 0) {
+			if (rc < 0) {
 				goto shutdown;
 			}
 
@@ -182,9 +182,9 @@ static void handle_client(CONTEXT *c, int fd)
 				}
 			}
 
-			pgr_debugf("relaying message to %s (fd %d)",
+			pgr_debugf("sending message to %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_mbuf_relay(fe);
+			rc = pgr_mbuf_send(fe);
 			if (rc != 0) {
 				goto shutdown;
 			}
@@ -201,7 +201,7 @@ again:
 			pgr_debugf("reading message from %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
 			rc = pgr_mbuf_recv(be);
-			if (rc != 0) {
+			if (rc < 0) {
 				goto shutdown;
 			}
 
@@ -213,8 +213,10 @@ again:
 
 				befd = writer.fd;
 				pgr_mbuf_setfd(fe, MBUF_SAME_FD, befd);
+				pgr_mbuf_setfd(be, befd, MBUF_SAME_FD);
 				pgr_debugf("resending saved messages to writer (fd %d)", befd);
 				pgr_mbuf_resend(fe);
+				pgr_mbuf_reset(fe);
 				goto again;
 			}
 
@@ -230,7 +232,7 @@ again:
 				do {
 					pgr_debugf("reading message from frontend (fd %d)", frontend.fd);
 					rc = pgr_mbuf_recv(fe);
-					if (rc != 0) {
+					if (rc < 0) {
 						goto shutdown;
 					}
 
