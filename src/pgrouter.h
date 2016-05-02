@@ -234,55 +234,22 @@ int pgr_mbuf_relay(MBUF *m);
    if necessary. */
 int pgr_mbuf_discard(MBUF *m);
 
+/* Keep receiving and discarding messages until a
+   message of type `until` is seen.
+   Any previous messages in the buffer are kept. */
+int pgr_mbuf_drain(MBUF *m, char until);
+
+/* Check if the current message is an ErrorMessage,
+   optinally asserting that it contains the specified
+   error code (also known as `sqlstate`).  A NULL
+   `code` argument skips this check. */
+int pgr_mbuf_iserror(MBUF *m, const char *code);
+
 char pgr_mbuf_msgtype(MBUF *m);
 unsigned int pgr_mbuf_msglength(MBUF *m);
-void* pgr_mbuf_data(MBUF *m);
-
-#define MSG_BUFSIZ 16384
-
-typedef struct {
-	char buf[MSG_BUFSIZ];
-	int free;    /* how many bytes are free in the buffer */
-	int offset;  /* how far have we ready into the buffer */
-} MSG;
-
-MSG* pgr_m_new();
-void pgr_m_init(MSG *m);
-
-void pgr_m_skip(MSG *m, size_t n);
-void pgr_m_discard(MSG *m, int fd);
-void pgr_m_flush(MSG *m);
-
-int pgr_m_write(MSG *m, const void *buf, size_t len);
-
-int pgr_m_sendn(MSG *m, int fd, size_t len);
-int pgr_m_resend(MSG *m, int fd);
-
-int pgr_m_next(MSG *m, int fd);
-int pgr_m_relay(MSG *m, int from, int to);
-
-int pgr_m_ignore(MSG *m, int fd, const char *until);
-
-int pgr_m_iserror(MSG *m, const char *code);
-void pgr_m_errorf(MSG *m, char *sev, char *code, char *msg, ...);
-
-#define pgr_m_offset(m) ((m)->offset)
-#define pgr_m_free(m)   ((m)->free)
-#define pgr_m_used(m)   (MSG_BUFSIZ - (m)->free)
-#define pgr_m_unread(m) (pgr_m_used(m) - pgr_m_offset(m))
-#define pgr_m_reset(m)  ((m)->offset = 0, (m)->free = MSG_BUFSIZ)
-#define pgr_m_rewind(m) ((m)->offset = 0)
-#define pgr_m_send(m,f) pgr_m_sendn((m), (f), pgr_m_unread(m))
-
-#define pgr_m_buffer(m)   ((m)->buf+(m)->offset)
-#define pgr_m_str_at(m,i) ((char*)(m)->buf+(m)->offset+(i))
-#define pgr_m_u8_at(m,i)  ((uint8_t)((m)->buf[(m)->offset+(i)]))
-#define pgr_m_u16_at(m,i) ((uint16_t)(  (pgr_m_u8_at((m),(i))   <<  8) \
-                                      | (pgr_m_u8_at((m),(i)+1))))
-#define pgr_m_u32_at(m,i) ((uint32_t)(  (pgr_m_u8_at((m),(i))   << 24) \
-                                      | (pgr_m_u8_at((m),(i)+1) << 16) \
-                                      | (pgr_m_u8_at((m),(i)+2) <<  8) \
-                                      | (pgr_m_u8_at((m),(i)+3))))
+void* pgr_mbuf_data(MBUF *m, size_t at, size_t len);
+int pgr_mbuf_u16(MBUF *m, size_t at);
+long int pgr_mbuf_u32(MBUF *m, size_t at);
 
 /* process control subroutines */
 void pgr_abort(int code);

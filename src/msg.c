@@ -20,213 +20,9 @@
 #include <errno.h>
 #include <fcntl.h>
 
-MSG* pgr_m_new()
-{
-	MSG *m = calloc(1, sizeof(MSG));
-	if (!m) {
-		pgr_abort(ABORT_MEMFAIL);
-	}
-	m->free = sizeof(m->buf);
-	return m;
-}
-
-void pgr_m_init(MSG *m)
-{
-	memset(m, 0, sizeof(MSG));
-	m->free = sizeof(m->buf);
-}
-
-void pgr_m_skip(MSG *m, size_t n)
-{
-	assert(pgr_m_unread(m) >= n);
-	m->offset += n;
-}
-
-void pgr_m_discard(MSG *m, int fd)
-{
-	int len;
-	ssize_t n;
-
-	if (pgr_m_u8_at(m,0) == 0) {
-		len = pgr_m_u32_at(m,0);
-	} else {
-		len = 1 + pgr_m_u32_at(m,1);
-	}
-
-	n = pgr_m_unread(m);
-	while (len > n) {
-		/* there's more data on the wire.                 */
-		/* drop what we've got, and then go read the rest */
-		len -= n;
-
-		m->offset = 0;
-		m->free = MSG_BUFSIZ;
-		n = read(fd, m->buf, m->free);
-		if (n <= 0) {
-			return;
-		}
-	}
-
-	pgr_m_skip(m, len);
-	pgr_m_flush(m);
-}
-
-void pgr_m_flush(MSG *m)
-{
-	if (m->offset > 0 && pgr_m_unread(m) > 0) {
-		memmove(m->buf, m->buf + pgr_m_offset(m), pgr_m_unread(m));
-	}
-	m->free += m->offset;
-	m->offset = 0;
-}
-
-int pgr_m_write(MSG *m, const void *buf, size_t len)
-{
-	if (len > m->free) {
-		memcpy(m->buf + pgr_m_used(m), buf, m->free);
-		len -= m->free;
-		m->free = 0;
-		return len;
-	}
-
-	memcpy(m->buf + pgr_m_used(m), buf, len);
-	m->free -= len;
-	return 0;
-
-
-}
-
-int pgr_m_sendn(MSG *m, int fd, size_t len)
-{
-	int rc;
-	assert(len != 0);
-
-	pgr_debugf("sending %d bytes to fd %d", len, fd);
-	rc = pgr_sendn(fd, m->buf + m->offset, len);
-	if (rc != 0) {
-		return rc;
-	}
-
-	pgr_m_skip(m, len);
-	return 0;
-}
-
-int pgr_m_resend(MSG *m, int fd)
-{
-	pgr_m_rewind(m);
-	return pgr_m_send(m, fd);
-}
-
-int pgr_m_next(MSG *m, int fd)
-{
-	size_t n;
-
-	while (pgr_m_unread(m) < 5) {
-		n = read(fd, pgr_m_buffer(m), pgr_m_free(m));
-		if (n <= 0) {
-			return -1;
-		}
-		m->free -= n;
-	}
-
-	return 0;
-}
-
-int pgr_m_relay(MSG *m, int from, int to)
-{
-	size_t len = pgr_m_u32_at(m, 1) + 1;
-	size_t n   = pgr_m_unread(m);
-
-	/* is there more to this message? */
-	while (len > pgr_m_unread(m)) {
-		len -= pgr_m_unread(m);
-		pgr_m_send(m, to);
-		pgr_m_flush(m);
-		pgr_m_next(m, from);
-	}
-	pgr_m_sendn(m, to, len);
-	pgr_m_flush(m);
-
-	return 0;
-}
-
-int pgr_m_ignore(MSG *m, int fd, const char *until)
-{
-	size_t n, len;
-	char type;
-
-	for (;;) {
-		type = pgr_m_u8_at(m, 0);
-		len  = pgr_m_u32_at(m, 1) + 1;
-		n    = pgr_m_unread(m);
-
-		while (len > n) {
-			/* there's more data on the wire.                 */
-			/* send what we've got, and then go read the rest */
-			len -= n;
-
-			m->offset = 0;
-			m->free = MSG_BUFSIZ;
-			n = read(fd, m->buf, m->free);
-			if (n <= 0) {
-				return -1;
-			}
-		}
-
-		pgr_m_skip(m, len);
-		pgr_m_flush(m);
-
-		if (strchr(until, type) != NULL) {
-			return 0;
-		}
-
-		pgr_m_next(m, fd);
-	}
-}
-
-int pgr_m_iserror(MSG *m, const char *code)
-{
-	if (pgr_m_u8_at(m, 0) != 'E') {
-		return 0;
-	}
-
-	char *e;
-
-	e = pgr_m_str_at(m, 5);
-	while (*e) {
-		if (*e == 'C') {
-			e++;
-			return strcmp(e, code) == 0;
-		}
-		while (*e++)
-			;
-	}
-
-	return 0;
-}
-
-void pgr_m_errorf(MSG *m, char *sev, char *code, char *msgf, ...)
-{
-	int len;
-	va_list ap;
-	char *msg;
-
-	va_start(ap, msgf);
-	vasprintf(&msg, msgf, ap);
-	va_end(ap);
-
-	len = 1+4                /* type + len            */
-	    + 1+strlen(sev)+1    /* 'S' + severity + '\0' */
-	    + 1+strlen(code)+1   /* 'C' + code     + '\0' */
-	    + 1+strlen(msg)+1    /* 'M' + msg      + '\0' */
-	    + 1;                 /* trailing '\0'         */
-	len = htonl(len);
-	pgr_m_write(m, "E",  1); pgr_m_write(m, &len, 4);
-	pgr_m_write(m, "S",  1); pgr_m_write(m, sev,  strlen(sev)  + 1);
-	pgr_m_write(m, "C",  1); pgr_m_write(m, code, strlen(code) + 1);
-	pgr_m_write(m, "M",  1); pgr_m_write(m, msg,  strlen(msg)  + 1);
-	pgr_m_write(m, "\0", 1);
-}
+#define available(m) ((m)->fill - (m)->start)
+#define u16(v) ((uint16_t)((*(v)&0xff)<<8)|*((v)+1)&0xff)
+#define u32(v) ((uint16_t)((*(v)&0xff)<<24)|((*((v)+1)&0xff)<<16)|((*((v)+2)&0xff)<<8)|(*((v)+3)&0xff))
 
 static int tmpfd()
 {
@@ -236,10 +32,6 @@ static int tmpfd()
 	}
 	return fileno(f);
 }
-
-#define available(m) ((m)->fill - (m)->start)
-#define u16(v) ((uint16_t)((*(v)&0xff)<<8)|*((v)+1)&0xff)
-#define u32(v) ((uint16_t)((*(v)&0xff)<<24)|((*((v)+1)&0xff)<<16)|((*((v)+2)&0xff)<<8)|(*((v)+3)&0xff))
 
 static unsigned int size(MBUF *m)
 {
@@ -420,14 +212,17 @@ int pgr_mbuf_resend(MBUF *m)
 		while (offset > 0) {
 			n = read(m->cache, block, 2048);
 			if (n <= 0) {
+				free(block);
 				return 1;
 			}
 			offset -= n;
 			n = writen(m->outfd, block, n);
 			if (n <= 0) {
+				free(block);
 				return 1;
 			}
 		}
+		free(block);
 	}
 
 	until = m->start;
@@ -522,6 +317,61 @@ int pgr_mbuf_discard(MBUF *m)
 	return 0;
 }
 
+/* Keep receiving and discarding messages until a
+   message of type `until` is seen.
+   Any previous messages in the buffer are kept. */
+int pgr_mbuf_drain(MBUF *m, char until)
+{
+	char type;
+
+	for (;;) {
+		type = pgr_mbuf_msgtype(m);
+		if (type < 0) {
+			return -1;
+		}
+
+		pgr_mbuf_discard(m);
+		pgr_mbuf_recv(m);
+
+		if (type == until) {
+			return 0;
+		}
+	}
+}
+
+/* Check if the current message is an ErrorMessage,
+   optinally asserting that it contains the specified
+   error code (also known as `sqlstate`).  A NULL
+   `code` argument skips this check. */
+int pgr_mbuf_iserror(MBUF *m, const char *code)
+{
+	size_t n;
+
+	if (pgr_mbuf_msgtype(m) != 'E') {
+		return 1;
+	}
+
+	if (!code) {
+		return 0;
+	}
+
+	n = m->start + 5;
+	while (n < m->fill) {
+		if (m->buf[n] == '\0') {
+			return 1;
+		}
+		if (m->buf[n] == 'C' && n + 6 < m->fill) {
+			return memcmp(m->buf + n + 1, code, 5);
+		}
+		for (n++; n < m->fill && m->buf[n] != '\0'; n++)
+			;
+		n++;
+	}
+
+	return 1;
+}
+
+
 char pgr_mbuf_msgtype(MBUF *m)
 {
 	if (available(m) == 0) {
@@ -549,7 +399,6 @@ char pgr_mbuf_msgtype(MBUF *m)
 
 unsigned int pgr_mbuf_msglength(MBUF *m)
 {
-	/* FIXME: doesn't handle untyped messages! */
 	if (available(m) < 5) {
 		return 0;
 	}
@@ -561,12 +410,35 @@ unsigned int pgr_mbuf_msglength(MBUF *m)
 	return u32(m->buf + m->start + 1) - 4;
 }
 
-void* pgr_mbuf_data(MBUF *m)
+void* pgr_mbuf_data(MBUF *m, size_t at, size_t len)
 {
-	if (available(m) < 5) {
-		return NULL;
+	if (available(m) < 0) {
+		return NULL; /* no data; can't determine typed-ness */
 	}
-	return m->buf + m->start + 5;
+
+	at += (m->buf[m->start+0] == 0 ? 0 : 1) + 4;
+	if (available(m) < at + len) {
+		return NULL; /* not enough data to fulfill request */
+	}
+	return m->buf + m->start + at;
+}
+
+int pgr_mbuf_u16(MBUF *m, size_t at)
+{
+	void *x = pgr_mbuf_data(m, at, 2);
+	if (!x) {
+		return -1;
+	}
+	return u16((unsigned char*)x);
+}
+
+long int pgr_mbuf_u32(MBUF *m, size_t at)
+{
+	void *x = pgr_mbuf_data(m, at, 2);
+	if (!x) {
+		return -1;
+	}
+	return u32((unsigned char*)x);
 }
 
 #ifdef PTEST
@@ -676,6 +548,11 @@ static void reset_test()
 	free(s);
 
 	writeok(in, "S\0\0\0\x4", 5);
+	writeok(in, "E\0\0\0\x22"
+	            "SFATAL\0"
+	            "C12345\0"
+	            "Dstuffs broke yo\0"
+	            "\0", 35);
 	lseek(in, 0, SEEK_SET);
 
 	ftruncate(out, 0);
@@ -698,7 +575,15 @@ int main(int argc, char **argv)
 	so("interrogating message length from an empty buffer returns a zero-length",
 			pgr_mbuf_msglength(m) == 0);
 	so("interrogating message data from an empty buffer returns NULL",
-			pgr_mbuf_data(m) == NULL);
+			pgr_mbuf_data(m, 0, 0) == NULL);
+
+	 /********************************************************/
+	/** Data Access                                        **/
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	so("u16 extracts two octets at data offset 0", pgr_mbuf_u16(m, 0) == 1234);
+	so("u16 extracts two octets at data offset 2", pgr_mbuf_u16(m, 2) == 5679);
+	so("u32 extracts four octets at data offset 0", pgr_mbuf_u32(m, 0) == (1234 << 16) | 5679);
 
 	 /********************************************************/
 	/** Discard                                            **/
@@ -717,7 +602,7 @@ int main(int argc, char **argv)
 	ok(pgr_mbuf_discard(m));
 	so("recv ok", pgr_mbuf_recv(m) > 0);
 	msg_is("message #4", m, 'Q', 33);
-	ok(memcmp(pgr_mbuf_data(m), "Do you know the way to San Jose?", 33));
+	ok(memcmp(pgr_mbuf_data(m, 0, 0), "Do you know the way to San Jose?", 33));
 
 	ok(pgr_mbuf_discard(m));
 	so("recv ok", pgr_mbuf_recv(m) > 0);
@@ -726,6 +611,10 @@ int main(int argc, char **argv)
 	ok(pgr_mbuf_discard(m));
 	so("recv ok", pgr_mbuf_recv(m) > 0);
 	msg_is("message #6", m, 'S', 0);
+
+	ok(pgr_mbuf_discard(m));
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	msg_is("message #7", m, 'E', 30);
 
 	ok(pgr_mbuf_discard(m));
 	so("eof", pgr_mbuf_recv(m) == 0);
@@ -816,6 +705,36 @@ int main(int argc, char **argv)
 			lseek(out, 0, SEEK_CUR) == 8+9+5+38+0x8000+5);
 
 	msg_is("after sending 'L' message", m, 'S', 0);
+
+	 /********************************************************/
+	/* Drain                                                */
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	ok(pgr_mbuf_relay(m));
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f", 8);
+
+	msg_is("after relaying SSLRequest message", m, MSG_STARTUP, 5);
+	ok(pgr_mbuf_drain(m, 'L'));
+
+	fprintf(stderr, "m is at %c (%u)\n", pgr_mbuf_msgtype(m), pgr_mbuf_msglength(m));
+	msg_is("after draining to 'L' message", m, 'S', 0);
+	ok(pgr_mbuf_relay(m));
+
+	fileok(out, "\0\0\0\x08\x04\xd2\x16\x2f"
+	            "S\0\0\0\4", 8+5);
+
+	 /********************************************************/
+	/* Error Checking                                       */
+	reset_test();
+	so("recv ok", pgr_mbuf_recv(m) > 0);
+	notok(pgr_mbuf_iserror(m, NULL));
+	notok(pgr_mbuf_iserror(m, "12345"));
+	ok(pgr_mbuf_drain(m, 'S'));
+
+	msg_is("found the [E]rror message", m, 'E', 30);
+	ok(pgr_mbuf_iserror(m, NULL));
+	ok(pgr_mbuf_iserror(m, "12345"));
+	notok(pgr_mbuf_iserror(m, "x2600"));
 
 	 /********************************************************/
 	/* Concatenate                                          */

@@ -122,15 +122,13 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 
 static void handle_client(CONTEXT *c, int fd)
 {
-	int rc, i, state;
 	CONNECTION frontend, reader, writer;
+	int rc, befd, in_txn, len;
+	char type;
+	MBUF *fe, *be;
 
-	MSG *relay  = pgr_m_new();
-	MSG *buffer = pgr_m_new();
-
-	MSG *fe, *be;
-	fe = pgr_m_new();
-	be = pgr_m_new();
+	fe = pgr_mbuf_new(16384);
+	be = pgr_mbuf_new(4096);
 
 	pgr_conn_init(c, &frontend);
 	pgr_conn_init(c, &reader);
@@ -147,41 +145,46 @@ static void handle_client(CONTEXT *c, int fd)
 		goto shutdown;
 	}
 
-	int befd;        /* which backend (reader / writer) is active */
-	int in_txn = 0;  /* are we in a transaction? */
+	pgr_mbuf_setfd(fe, fd, MBUF_NO_FD);
+	pgr_mbuf_setfd(be, MBUF_NO_FD, fd);
 
-	char type;
-	int len;
-
+	in_txn = 0;
 	for (;;) {
 		if (!in_txn) {
 			befd = reader.fd;
 		}
 
-		pgr_m_reset(relay);
+		pgr_mbuf_setfd(fe, MBUF_SAME_FD, befd);
+		pgr_mbuf_setfd(be, befd, MBUF_SAME_FD);
+
 		do {
-			pgr_debugf("reading message from frontend (fd %d)", frontend.fd);
-			rc = pgr_m_next(relay, frontend.fd);
+			pgr_debugf("reading message from frontend");
+			rc = pgr_mbuf_recv(fe);
 			if (rc != 0) {
 				goto shutdown;
 			}
 
-			type = pgr_m_u8_at (relay, 0);
-			len  = pgr_m_u32_at(relay, 1);
+			type = pgr_mbuf_msgtype(fe);
+			len  = pgr_mbuf_msglength(fe);
 
 			if (type == 'Q') {
-				if (len >= 4+5 && strncasecmp(pgr_m_str_at(relay,5), "begin", 5) == 0) {
+				char *query;
+				query = pgr_mbuf_data(fe, 0, 5);
+				if (query && strncasecmp(query, "begin", 5) == 0) {
 					in_txn = 1;
 					befd = writer.fd; /* force transactions to writer */
+					pgr_mbuf_setfd(fe, MBUF_SAME_FD, writer.fd);
 				}
-				if (len >= 4+6 && strncasecmp(pgr_m_str_at(relay,5), "commit", 6) == 0) {
+
+				query = pgr_mbuf_data(fe, 0, 6);
+				if (query && strncasecmp(query, "commit", 6) == 0) {
 					in_txn = 0;
 				}
 			}
 
 			pgr_debugf("relaying message to %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_m_relay(relay, frontend.fd, befd);
+			rc = pgr_mbuf_relay(fe);
 			if (rc != 0) {
 				goto shutdown;
 			}
@@ -197,47 +200,45 @@ static void handle_client(CONTEXT *c, int fd)
 again:
 			pgr_debugf("reading message from %s (fd %d)",
 					befd == reader.fd ? "reader" : "writer", befd);
-			rc = pgr_m_next(buffer, befd);
+			rc = pgr_mbuf_recv(be);
 			if (rc != 0) {
 				goto shutdown;
 			}
 
-			type = pgr_m_u8_at (buffer, 0);
+			type = pgr_mbuf_msgtype(be);
 
-			if (pgr_m_iserror(buffer, "25006") && befd == reader.fd) {
+			if (pgr_mbuf_iserror(be, "25006") == 0 && befd == reader.fd) {
 				pgr_debugf("E25006 bad routing - ignoring remaining backend messages...");
-				pgr_m_ignore(buffer, befd, "Z");
-				pgr_debugf("done ignoring...");
+				pgr_mbuf_drain(be, 'Z');
 
 				befd = writer.fd;
+				pgr_mbuf_setfd(fe, MBUF_SAME_FD, befd);
 				pgr_debugf("resending saved messages to writer (fd %d)", befd);
-				pgr_m_resend(relay, befd);
+				pgr_mbuf_resend(fe);
 				goto again;
 			}
 
 			/* handle CopyInResponse by switching to sub-protocol */
 			if (type == 'G') {
 				pgr_debugf("relaying message to frontend (fd %d)", frontend.fd);
-				rc = pgr_m_relay(buffer, befd, frontend.fd);
+				rc = pgr_mbuf_relay(be);
 				if (rc != 0) {
 					goto shutdown;
 				}
-				pgr_m_flush(buffer);
 
 				pgr_debugf("switching to COPY DATA sub-protocol");
 				do {
 					pgr_debugf("reading message from frontend (fd %d)", frontend.fd);
-					rc = pgr_m_next(buffer, frontend.fd);
+					rc = pgr_mbuf_recv(fe);
 					if (rc != 0) {
 						goto shutdown;
 					}
 
-					type = pgr_m_u8_at (buffer, 0);
+					type = pgr_mbuf_msgtype(fe);
 
 					pgr_debugf("relaying message to %s (fd %d)",
 							befd == reader.fd ? "reader" : "writer", befd);
-					rc = pgr_m_relay(buffer, frontend.fd, befd);
-					pgr_m_flush(buffer);
+					rc = pgr_mbuf_relay(fe);
 					if (rc != 0) {
 						goto shutdown;
 					}
@@ -247,11 +248,10 @@ again:
 			}
 
 			pgr_debugf("relaying message to frontend (fd %d)", frontend.fd);
-			rc = pgr_m_relay(buffer, befd, frontend.fd);
+			rc = pgr_mbuf_relay(be);
 			if (rc != 0) {
 				goto shutdown;
 			}
-			pgr_m_flush(buffer);
 
 		} while (type != 'Z');
 	}
