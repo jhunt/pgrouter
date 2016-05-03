@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <libpq-fe.h>
 
 #define TEST_SKIPPED 0
@@ -50,6 +51,8 @@ static struct {
 	{ "Large Payload INSERT", test_large_insert, 0 },
 };
 
+static FILE *ERROR;
+
 int main(int argc, char **argv)
 {
 	int rc, i, total, nap;
@@ -84,10 +87,16 @@ int main(int argc, char **argv)
 		return 7;
 	}
 
+	ERROR = tmpfile();
+	if (!ERROR) {
+		fprintf(stderr, "FAILED to set up a buffering tempfile for test out: %s\n", strerror(errno));
+		return 8;
+	}
+
 	rc = load_schema(conn);
 	if (rc != 0) {
 		fprintf(stderr, "FAILED to load testing schema\n");
-		return 8;
+		return 9;
 	}
 
 	nap = 0;
@@ -99,11 +108,23 @@ int main(int argc, char **argv)
 	fprintf(stderr, "found %i test%s total\n", total, total == 1 ? "" : "s");
 	for (i = 0; i < total; i++) {
 		usleep(nap);
-		fprintf(stderr, "Running test suite '%s'\n", TESTS[i].name);
-		fprintf(stderr, "----------------------------------\n");
+
+		ftruncate(fileno(ERROR), 0);
+		rewind(ERROR);
+
 		TESTS[i].result = TESTS[i].fn(conn);
-		fprintf(stderr, "----------------------------------\n");
-		fprintf(stderr, "(test suite '%s' complete)\n\n", TESTS[i].name);
+		if (TESTS[i].result != TEST_OK) {
+			char block[4096];
+
+			fprintf(stderr, "'%s' %s\n", TESTS[i].name, result(TESTS[i].result));
+			fprintf(stderr, "----------------------------------\n");
+
+			rewind(ERROR);
+			while (fgets(block, 4096, ERROR) != NULL) {
+				fprintf(stderr, "%s", block);
+			}
+			fprintf(stderr, "\n\n\n");
+		}
 	}
 
 	rc = 0;
@@ -121,10 +142,10 @@ int main(int argc, char **argv)
 static int COMMAND_QUERY(PGconn *conn, const char *sql)
 {
 	PGresult *r;
-	fprintf(stderr, "Running simple command query\n  `%s`\n", sql);
+	fprintf(ERROR, "Running simple command query\n  `%s`\n", sql);
 	r = PQexec(conn, sql);
 	if (!r) {
-		fprintf(stderr, "out of memory!\n");
+		fprintf(ERROR, "out of memory!\n");
 		return 0;
 	}
 
@@ -133,15 +154,15 @@ static int COMMAND_QUERY(PGconn *conn, const char *sql)
 
 static int DATA_QUERY(PGconn *conn, PGresult **r, const char *sql)
 {
-	fprintf(stderr, "Running data query\n  `%s`\n", sql);
+	fprintf(ERROR, "Running data query\n  `%s`\n", sql);
 	*r = PQexec(conn, sql);
 	if (!*r) {
-		fprintf(stderr, "out of memory!\n");
+		fprintf(ERROR, "out of memory!\n");
 		return 0;
 	}
 
 	if (PQresultStatus(*r) != PGRES_TUPLES_OK) {
-		fprintf(stderr, "query failed: %s\n", PQresultErrorMessage(*r));
+		fprintf(ERROR, "query failed: %s\n", PQresultErrorMessage(*r));
 		return 0;
 	}
 
@@ -184,7 +205,7 @@ static int test_simple_insert(PGconn *conn)
 	}
 
 	if (PQntuples(r) != 1 ) {
-		fprintf(stderr, "Found %d tuple(s), expected only 1\n", PQntuples(r));
+		fprintf(ERROR, "Found %d tuple(s), expected only 1\n", PQntuples(r));
 		return TEST_FAIL;
 	}
 
@@ -198,9 +219,9 @@ static int test_large_insert(PGconn *conn)
 	long unsigned int i;
 
 	for (i = 1 << 8; i <= 65536; i = i << 1) {
-		fprintf(stderr, "Testing a %lub SQL INSERT\n", i);
+		fprintf(ERROR, "Testing a %lub SQL INSERT\n", i);
 
-		fprintf(stderr, "Deleting previous note record #3...\n");
+		fprintf(ERROR, "Deleting previous note record #3...\n");
 		if (!COMMAND_QUERY(conn, "DELETE FROM notes WHERE id = 3")) {
 			return TEST_FAIL;
 		}
