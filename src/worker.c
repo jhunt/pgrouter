@@ -120,12 +120,143 @@ static int determine_backends(CONTEXT *c, CONNECTION *reader, CONNECTION *writer
 	return -1;
 }
 
+static int query(MBUF *m, const char *query)
+{
+	size_t len = htonl(4 + strlen(query) + 1);
+	pgr_mbuf_cat(m, "Q", 1);
+	pgr_mbuf_cat(m, &len, 4);
+	pgr_mbuf_cat(m, query, strlen(query) + 1);
+	return 0;
+}
+
+static int xlog(const char *s, lag_t *lag)
+{
+	const char *p;
+	lag_t hi = 0, lo = 0;
+
+	pgr_debugf("parsing xlog value '%s'", s);
+	for (p = s; *p && *p != '/'; p++) {
+		if (*p >= '0' || *p <= '9') {
+			hi = hi * 0xf + (*p - '0');
+		} else if (*p >= 'a' || *p <= 'f') {
+			hi = hi * 0xf + (*p - 'a');
+		} else if (*p >= 'A' || *p <= 'F') {
+			hi = hi * 0xf + (*p - 'A');
+		} else {
+			pgr_logf(stderr, LOG_ERR, "[worker] invalid character '%c' found in xlog value %s", *p, s);
+			return 1;
+		}
+	}
+
+	if (*p != '/') {
+		pgr_logf(stderr, LOG_ERR, "[worker] malformed xlog value %s", s);
+		return 1;
+	}
+
+	for (p++; *p; p++) {
+		if (*p >= '0' || *p <= '9') {
+			lo = lo * 0xf + (*p - '0');
+		} else if (*p >= 'a' || *p <= 'f') {
+			lo = lo * 0xf + (*p - 'a');
+		} else if (*p >= 'A' || *p <= 'F') {
+			lo = lo * 0xf + (*p - 'A');
+		} else {
+			pgr_logf(stderr, LOG_ERR, "[worker] invalid character '%c' found in xlog value %s", *p, s);
+			return 1;
+		}
+	}
+
+	*lag = (hi << 32) | lo;
+	return 0;
+}
+
+static lag_t get_xlog_location(MBUF *m, const char *sql)
+{
+	int rc, len;
+	lag_t offset = 0;
+	char *buf;
+
+	/* SEND the query */
+	query(m, sql);
+	rc = pgr_mbuf_relay(m);
+	if (rc != 0) {
+		return (lag_t)0;
+	}
+
+	/* RECV the RowDescription */
+	rc = pgr_mbuf_recv(m);
+	if (rc < 0) {
+		return (lag_t)0;
+	}
+	if (pgr_mbuf_msgtype(m) != 'T') {
+		goto drain;
+	}
+	if (pgr_mbuf_u16(m, 0) != 1) {
+		pgr_logf(stderr, LOG_ERR, "Invalid number of columns (%d, not 1) in response to `%s`",
+				pgr_mbuf_u16(m, 0), sql);
+		goto drain;
+	}
+	pgr_mbuf_discard(m);
+
+	/* RECV the DataRow */
+	rc = pgr_mbuf_recv(m);
+	if (rc < 0) {
+		return (lag_t)0;
+	}
+	if (pgr_mbuf_msgtype(m) != 'D') {
+		goto drain;
+	}
+	/* extract the text value from column 0 */
+	len = pgr_mbuf_u32(m, 2);
+	if (len == 0 || len > 0xff) {
+		pgr_logf(stderr, LOG_ERR, "suspicious looking xlog value length (%d)\n", len);
+		goto drain;
+	}
+	buf = calloc(len + 1, 1);
+	if (!buf) {
+		pgr_abort(ABORT_MEMFAIL);
+	}
+	memcpy(buf, pgr_mbuf_data(m, 6, len), len);
+	rc = xlog(buf, &offset);
+	if (rc != 0) {
+		offset = 0;
+	}
+	pgr_mbuf_discard(m);
+
+	/* RECV the CommandComplete */
+	rc = pgr_mbuf_recv(m);
+	if (rc < 0) {
+		return (lag_t)0;
+	}
+	if (pgr_mbuf_msgtype(m) != 'C') {
+		goto drain;
+	}
+	pgr_mbuf_discard(m);
+
+	return offset;
+
+drain:
+	pgr_mbuf_drain(m, 'Z');
+	return (lag_t)0;
+}
+
+static lag_t get_master_offset(MBUF *m)
+{
+	return get_xlog_location(m, "SELECT pg_current_xlog_location()");
+}
+
+static lag_t get_slave_offset(MBUF *m)
+{
+	return get_xlog_location(m, "SELECT pg_last_xlog_receive_location()");
+}
+
 static void handle_client(CONTEXT *c, int fd)
 {
 	CONNECTION frontend, reader, writer;
 	int rc, befd, in_txn, len;
 	char type;
 	MBUF *fe, *be;
+	lag_t wr_xlog = 0;
 
 	fe = pgr_mbuf_new(16384);
 	be = pgr_mbuf_new(4096);
@@ -147,15 +278,26 @@ static void handle_client(CONTEXT *c, int fd)
 
 	pgr_mbuf_setfd(fe, fd, MBUF_NO_FD);
 	pgr_mbuf_setfd(be, MBUF_NO_FD, fd);
+	befd = reader.fd;
 
 	in_txn = 0;
 	for (;;) {
-		if (!in_txn) {
-			befd = reader.fd;
+		if (befd == writer.fd && !in_txn) {
+			if (wr_xlog > 1) {
+				pgr_debugf("checking to see if our reader has caught up with our writer");
+				/* FIXME: may want to defer to the watcher, instead */
+				pgr_mbuf_setfd(be, reader.fd, reader.fd);
+				if (get_slave_offset(be) >= wr_xlog) {
+					wr_xlog = 0;
+					befd = reader.fd;
+				}
+			} else {
+				befd = reader.fd;
+			}
 		}
 
-		pgr_mbuf_setfd(fe, MBUF_SAME_FD, befd);
-		pgr_mbuf_setfd(be, befd, MBUF_SAME_FD);
+		pgr_mbuf_setfd(fe, fd, befd);
+		pgr_mbuf_setfd(be, befd, fd);
 
 		do {
 			pgr_debugf("reading message from frontend");
@@ -173,7 +315,7 @@ static void handle_client(CONTEXT *c, int fd)
 				if (query && strncasecmp(query, "begin", 5) == 0) {
 					in_txn = 1;
 					befd = writer.fd; /* force transactions to writer */
-					pgr_mbuf_setfd(fe, MBUF_SAME_FD, writer.fd);
+					pgr_mbuf_setfd(fe, fd, writer.fd);
 				}
 
 				query = pgr_mbuf_data(fe, 0, 6);
@@ -212,8 +354,8 @@ again:
 				pgr_mbuf_drain(be, 'Z');
 
 				befd = writer.fd;
-				pgr_mbuf_setfd(fe, MBUF_SAME_FD, befd);
-				pgr_mbuf_setfd(be, befd, MBUF_SAME_FD);
+				pgr_mbuf_setfd(fe, fd, befd);
+				pgr_mbuf_setfd(be, befd, fd);
 				pgr_debugf("resending saved messages to writer (fd %d)", befd);
 				pgr_mbuf_resend(fe);
 				pgr_mbuf_reset(fe);
@@ -256,6 +398,14 @@ again:
 			}
 
 		} while (type != 'Z');
+
+		/* FIXME: only do this on success? */
+		wr_xlog = 0;
+		if (befd == writer.fd) {
+			pgr_mbuf_setfd(be, befd, befd);
+			pgr_debugf("we sent a query to the writer, querying it for its new xlog offset");
+			wr_xlog = get_master_offset(be);
+		}
 	}
 shutdown:
 	pgr_debugf("closing all frontend and backend connections");
