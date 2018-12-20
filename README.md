@@ -50,8 +50,9 @@ the write master without bothering the read slave.
 Installation & Configuration
 ----------------------------
 
-To compile form source, just run:
+To compile from source, just run:
 
+    ./bootstrap && \
     ./configure && \
     make && \
     sudo make install
